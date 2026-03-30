@@ -6,7 +6,7 @@ include('config/config.php');
 if (!isset($_SESSION['user_id']) && isset($_COOKIE['remember_token'])) {
     $token = mysqli_real_escape_string($conn, $_COOKIE['remember_token']);
     
-    // Check token in admin_users table
+    // Check in admin_users table
     $sql = "SELECT * FROM admin_users WHERE remember_token = ? AND status = 'active'";
     $stmt = mysqli_prepare($conn, $sql);
     mysqli_stmt_bind_param($stmt, "s", $token);
@@ -23,33 +23,82 @@ if (!isset($_SESSION['user_id']) && isset($_COOKIE['remember_token'])) {
         header('Location: admin/index.php');
         exit;
     } else {
-        // Check token in linemen table
-        $sql = "SELECT * FROM linemen WHERE remember_token = ? AND status = 'active'";
+        // Check in collection_staff table
+        $sql = "SELECT * FROM collection_staff WHERE remember_token = ? AND status = 'active'";
         $stmt = mysqli_prepare($conn, $sql);
         mysqli_stmt_bind_param($stmt, "s", $token);
         mysqli_stmt_execute($stmt);
         $result = mysqli_stmt_get_result($stmt);
         
         if ($result && mysqli_num_rows($result) > 0) {
-            $lineman = mysqli_fetch_assoc($result);
-            $_SESSION['user_id'] = $lineman['id'];
-            $_SESSION['username'] = $lineman['username'];
-            $_SESSION['user_role'] = 'lineman';
-            $_SESSION['name'] = $lineman['full_name'];
-            $_SESSION['employee_id'] = $lineman['employee_id'];
-            $_SESSION['assigned_area'] = $lineman['assigned_area'];
-            header('Location: user/index.php');
+            $staff = mysqli_fetch_assoc($result);
+            $_SESSION['user_id'] = $staff['id'];
+            $_SESSION['username'] = $staff['username'];
+            $_SESSION['user_role'] = 'collection';
+            $_SESSION['name'] = $staff['full_name'];
+            $_SESSION['employee_id'] = $staff['employee_id'];
+            $_SESSION['assigned_area'] = $staff['assigned_area'];
+            header('Location: collection/index.php');
             exit;
+        } else {
+            // Check in distributors table
+            $sql = "SELECT * FROM distributors WHERE remember_token = ? AND status = 'active'";
+            $stmt = mysqli_prepare($conn, $sql);
+            mysqli_stmt_bind_param($stmt, "s", $token);
+            mysqli_stmt_execute($stmt);
+            $result = mysqli_stmt_get_result($stmt);
+            
+            if ($result && mysqli_num_rows($result) > 0) {
+                $distributor = mysqli_fetch_assoc($result);
+                $_SESSION['user_id'] = $distributor['id'];
+                $_SESSION['username'] = $distributor['username'];
+                $_SESSION['user_role'] = 'distributor';
+                $_SESSION['name'] = $distributor['contact_person'];
+                $_SESSION['company_name'] = $distributor['company_name'];
+                $_SESSION['distributor_code'] = $distributor['distributor_code'];
+                header('Location: distributor/index.php');
+                exit;
+            } else {
+                // Check in linemen table
+                $sql = "SELECT * FROM linemen WHERE remember_token = ? AND status = 'active'";
+                $stmt = mysqli_prepare($conn, $sql);
+                mysqli_stmt_bind_param($stmt, "s", $token);
+                mysqli_stmt_execute($stmt);
+                $result = mysqli_stmt_get_result($stmt);
+                
+                if ($result && mysqli_num_rows($result) > 0) {
+                    $lineman = mysqli_fetch_assoc($result);
+                    $_SESSION['user_id'] = $lineman['id'];
+                    $_SESSION['username'] = $lineman['username'];
+                    $_SESSION['user_role'] = 'lineman';
+                    $_SESSION['name'] = $lineman['full_name'];
+                    $_SESSION['employee_id'] = $lineman['employee_id'];
+                    $_SESSION['assigned_area'] = $lineman['assigned_area'];
+                    header('Location: user/index.php');
+                    exit;
+                }
+            }
         }
     }
 }
 
 // Redirect if already logged in via session
 if (isset($_SESSION['user_id'])) {
-    if ($_SESSION['user_role'] == 'admin') {
-        header('Location: admin/index.php');
-    } else {
-        header('Location: user/index.php');
+    switch ($_SESSION['user_role']) {
+        case 'admin':
+            header('Location: admin/index.php');
+            break;
+        case 'collection':
+            header('Location: collection/index.php');
+            break;
+        case 'distributor':
+            header('Location: distributor/index.php');
+            break;
+        case 'lineman':
+            header('Location: user/index.php');
+            break;
+        default:
+            header('Location: index.php');
     }
     exit;
 }
@@ -65,7 +114,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (empty($username) || empty($password)) {
         $error_message = 'Please enter both username and password';
     } else {
-        // Check in admin_users table first
+        $login_success = false;
+        $user_role = '';
+        
+        // Check in admin_users table
         $sql = "SELECT * FROM admin_users WHERE username = ? AND status = 'active'";
         $stmt = mysqli_prepare($conn, $sql);
         mysqli_stmt_bind_param($stmt, "s", $username);
@@ -76,12 +128,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $admin = mysqli_fetch_assoc($result);
             
             if (password_verify($password, $admin['password'])) {
-                // Admin login successful
                 $_SESSION['user_id'] = $admin['id'];
                 $_SESSION['username'] = $admin['username'];
                 $_SESSION['user_role'] = 'admin';
                 $_SESSION['name'] = $admin['name'];
                 $_SESSION['email'] = $admin['email'];
+                $_SESSION['role_type'] = $admin['role'];
                 
                 // Update last login
                 $update_sql = "UPDATE admin_users SET last_login = NOW() WHERE id = ?";
@@ -91,26 +143,116 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 // Set remember me cookie if checked
                 if ($remember_me) {
-                    $token = bin2hex(random_bytes(32)); // Generate secure token
-                    $expiry = time() + (365 * 24 * 60 * 60); // 1 year
+                    $token = bin2hex(random_bytes(32));
+                    $expiry = time() + (365 * 24 * 60 * 60);
                     
-                    // Store token in database
                     $token_sql = "UPDATE admin_users SET remember_token = ? WHERE id = ?";
                     $token_stmt = mysqli_prepare($conn, $token_sql);
                     mysqli_stmt_bind_param($token_stmt, "si", $token, $admin['id']);
                     mysqli_stmt_execute($token_stmt);
                     
-                    // Set cookie
                     setcookie('remember_token', $token, $expiry, '/', '', false, true);
                 }
                 
+                $login_success = true;
                 header('Location: admin/index.php');
                 exit;
-            } else {
-                $error_message = 'Invalid username or password';
             }
-        } else {
-            // Check in linemen table
+        }
+        
+        // If not admin, check in collection_staff table
+        if (!$login_success) {
+            $sql = "SELECT * FROM collection_staff WHERE username = ? AND status = 'active'";
+            $stmt = mysqli_prepare($conn, $sql);
+            mysqli_stmt_bind_param($stmt, "s", $username);
+            mysqli_stmt_execute($stmt);
+            $result = mysqli_stmt_get_result($stmt);
+            
+            if ($result && mysqli_num_rows($result) > 0) {
+                $staff = mysqli_fetch_assoc($result);
+                
+                if (password_verify($password, $staff['password'])) {
+                    $_SESSION['user_id'] = $staff['id'];
+                    $_SESSION['username'] = $staff['username'];
+                    $_SESSION['user_role'] = 'collection';
+                    $_SESSION['name'] = $staff['full_name'];
+                    $_SESSION['employee_id'] = $staff['employee_id'];
+                    $_SESSION['assigned_area'] = $staff['assigned_area'];
+                    
+                    // Update last login
+                    $update_sql = "UPDATE collection_staff SET last_login = NOW() WHERE id = ?";
+                    $update_stmt = mysqli_prepare($conn, $update_sql);
+                    mysqli_stmt_bind_param($update_stmt, "i", $staff['id']);
+                    mysqli_stmt_execute($update_stmt);
+                    
+                    // Set remember me cookie if checked
+                    if ($remember_me) {
+                        $token = bin2hex(random_bytes(32));
+                        $expiry = time() + (365 * 24 * 60 * 60);
+                        
+                        $token_sql = "UPDATE collection_staff SET remember_token = ? WHERE id = ?";
+                        $token_stmt = mysqli_prepare($conn, $token_sql);
+                        mysqli_stmt_bind_param($token_stmt, "si", $token, $staff['id']);
+                        mysqli_stmt_execute($token_stmt);
+                        
+                        setcookie('remember_token', $token, $expiry, '/', '', false, true);
+                    }
+                    
+                    $login_success = true;
+                    header('Location: collection/index.php');
+                    exit;
+                }
+            }
+        }
+        
+        // If not collection staff, check in distributors table
+        if (!$login_success) {
+            $sql = "SELECT * FROM distributors WHERE username = ? AND status = 'active'";
+            $stmt = mysqli_prepare($conn, $sql);
+            mysqli_stmt_bind_param($stmt, "s", $username);
+            mysqli_stmt_execute($stmt);
+            $result = mysqli_stmt_get_result($stmt);
+            
+            if ($result && mysqli_num_rows($result) > 0) {
+                $distributor = mysqli_fetch_assoc($result);
+                
+                if (password_verify($password, $distributor['password'])) {
+                    $_SESSION['user_id'] = $distributor['id'];
+                    $_SESSION['username'] = $distributor['username'];
+                    $_SESSION['user_role'] = 'distributor';
+                    $_SESSION['name'] = $distributor['contact_person'];
+                    $_SESSION['company_name'] = $distributor['company_name'];
+                    $_SESSION['distributor_code'] = $distributor['distributor_code'];
+                    $_SESSION['assigned_area'] = $distributor['assigned_area'];
+                    
+                    // Update last login
+                    $update_sql = "UPDATE distributors SET last_login = NOW() WHERE id = ?";
+                    $update_stmt = mysqli_prepare($conn, $update_sql);
+                    mysqli_stmt_bind_param($update_stmt, "i", $distributor['id']);
+                    mysqli_stmt_execute($update_stmt);
+                    
+                    // Set remember me cookie if checked
+                    if ($remember_me) {
+                        $token = bin2hex(random_bytes(32));
+                        $expiry = time() + (365 * 24 * 60 * 60);
+                        
+                        $token_sql = "UPDATE distributors SET remember_token = ? WHERE id = ?";
+                        $token_stmt = mysqli_prepare($conn, $token_sql);
+                        mysqli_stmt_bind_param($token_stmt, "si", $token, $distributor['id']);
+                        mysqli_stmt_execute($token_stmt);
+                        
+                        setcookie('remember_token', $token, $expiry, '/', '', false, true);
+                    }
+                    
+                    $login_success = true;
+                    header('Location: distributor/index.php');
+                    exit;
+                }
+            }
+        }
+        
+        // If not distributor, check in linemen table
+        if (!$login_success) {
             $sql = "SELECT * FROM linemen WHERE username = ? AND status = 'active'";
             $stmt = mysqli_prepare($conn, $sql);
             mysqli_stmt_bind_param($stmt, "s", $username);
@@ -121,7 +263,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $lineman = mysqli_fetch_assoc($result);
                 
                 if (password_verify($password, $lineman['password'])) {
-                    // Line man login successful
                     $_SESSION['user_id'] = $lineman['id'];
                     $_SESSION['username'] = $lineman['username'];
                     $_SESSION['user_role'] = 'lineman';
@@ -129,29 +270,34 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     $_SESSION['employee_id'] = $lineman['employee_id'];
                     $_SESSION['assigned_area'] = $lineman['assigned_area'];
                     
+                    // Update last login
+                    $update_sql = "UPDATE linemen SET last_login = NOW() WHERE id = ?";
+                    $update_stmt = mysqli_prepare($conn, $update_sql);
+                    mysqli_stmt_bind_param($update_stmt, "i", $lineman['id']);
+                    mysqli_stmt_execute($update_stmt);
+                    
                     // Set remember me cookie if checked
                     if ($remember_me) {
-                        $token = bin2hex(random_bytes(32)); // Generate secure token
-                        $expiry = time() + (365 * 24 * 60 * 60); // 1 year
+                        $token = bin2hex(random_bytes(32));
+                        $expiry = time() + (365 * 24 * 60 * 60);
                         
-                        // Store token in database
                         $token_sql = "UPDATE linemen SET remember_token = ? WHERE id = ?";
                         $token_stmt = mysqli_prepare($conn, $token_sql);
                         mysqli_stmt_bind_param($token_stmt, "si", $token, $lineman['id']);
                         mysqli_stmt_execute($token_stmt);
                         
-                        // Set cookie
                         setcookie('remember_token', $token, $expiry, '/', '', false, true);
                     }
                     
+                    $login_success = true;
                     header('Location: user/index.php');
                     exit;
-                } else {
-                    $error_message = 'Invalid username or password';
                 }
-            } else {
-                $error_message = 'Invalid username or password';
             }
+        }
+        
+        if (!$login_success) {
+            $error_message = 'Invalid username or password';
         }
     }
 }
@@ -162,7 +308,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Ecommer</title>
+    <title>Login - Ecommer Business Management System</title>
     
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -172,100 +318,123 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     
     <style>
         body {
-            background-color: #f8f9fa;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            height: 100vh;
+            min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
+            padding: 20px;
         }
         
         .login-container {
-            max-width: 400px;
+            max-width: 420px;
             width: 100%;
-            padding: 20px;
         }
         
         .login-card {
             background: white;
-            border-radius: 10px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            padding: 40px 30px;
-            border: 1px solid #eef2f7;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 45px 40px;
+            animation: fadeInUp 0.5s ease;
+        }
+        
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
         
         .login-header {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 40px;
+        }
+        
+        .logo-icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+        }
+        
+        .logo-icon i {
+            font-size: 40px;
+            color: white;
         }
         
         .login-header h3 {
             color: #2c3e50;
-            font-weight: 600;
-            margin-bottom: 5px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            font-size: 26px;
         }
         
         .login-header p {
             color: #7f8c8d;
-            font-size: 14px;
+            font-size: 13px;
             margin: 0;
         }
         
-        .water-icon {
-            font-size: 48px;
-            color: #3498db;
-            margin-bottom: 15px;
-        }
-        
         .form-label {
-            font-weight: 500;
+            font-weight: 600;
             color: #2c3e50;
             margin-bottom: 8px;
-            font-size: 14px;
+            font-size: 13px;
         }
         
         .form-control {
-            padding: 10px 15px;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
+            padding: 12px 15px;
+            border: 1px solid #e0e4e8;
+            border-radius: 10px;
             font-size: 14px;
             transition: all 0.3s;
         }
         
         .form-control:focus {
-            border-color: #3498db;
-            box-shadow: 0 0 0 0.2rem rgba(52, 152, 219, 0.15);
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.1);
         }
         
         .input-group-text {
             background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
+            border: 1px solid #e0e4e8;
             border-right: none;
+            border-radius: 10px 0 0 10px;
         }
         
         .toggle-password {
             background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
+            border: 1px solid #e0e4e8;
             border-left: none;
             cursor: pointer;
+            border-radius: 0 10px 10px 0;
         }
         
         .btn-login {
-            background-color: #3498db;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             border: none;
             color: white;
-            padding: 10px;
-            border-radius: 6px;
-            font-weight: 500;
-            font-size: 15px;
+            padding: 12px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 16px;
             transition: all 0.3s;
             width: 100%;
         }
         
         .btn-login:hover {
-            background-color: #2980b9;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.2);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
         }
         
         .btn-login:active {
@@ -273,24 +442,31 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
         
         .error-alert {
-            background-color: #fee;
+            background: linear-gradient(135deg, #fee 0%, #fdd 100%);
             border: 1px solid #fcc;
             color: #c33;
-            border-radius: 6px;
+            border-radius: 10px;
             padding: 12px 15px;
-            margin-bottom: 20px;
-            font-size: 14px;
+            margin-bottom: 25px;
+            font-size: 13px;
+        }
+        
+        .form-check-input:checked {
+            background-color: #667eea;
+            border-color: #667eea;
         }
         
         .login-footer {
             text-align: center;
-            margin-top: 20px;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #eef2f7;
             color: #95a5a6;
-            font-size: 13px;
+            font-size: 12px;
         }
         
         .login-footer a {
-            color: #3498db;
+            color: #667eea;
             text-decoration: none;
         }
         
@@ -298,28 +474,20 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             text-decoration: underline;
         }
         
-        .form-text {
-            color: #7f8c8d;
+        .brand-tagline {
+            text-align: center;
+            margin-top: 15px;
+            color: rgba(255,255,255,0.8);
             font-size: 12px;
-            margin-top: 5px;
         }
         
-        .input-group {
-            border-radius: 6px;
+        .brand-tagline a {
+            color: white;
+            text-decoration: none;
         }
         
-        .input-group .form-control:focus {
-            box-shadow: none;
-        }
-        
-        .input-group:focus-within {
-            box-shadow: 0 0 0 0.2rem rgba(52, 152, 219, 0.15);
-            border-radius: 6px;
-        }
-        
-        .input-group:focus-within .form-control,
-        .input-group:focus-within .input-group-text {
-            border-color: #3498db;
+        .brand-tagline a:hover {
+            text-decoration: underline;
         }
     </style>
 </head>
@@ -327,7 +495,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     <div class="login-container">
         <div class="login-card">
             <div class="login-header">
-
+                <div class="logo-icon">
+                    <i class="fas fa-store"></i>
+                </div>
                 <h3>Ecommer.in</h3>
                 <p>Business Management System</p>
             </div>
@@ -366,18 +536,29 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     </div>
                 </div>
                 
+                <div class="mb-4 form-check">
+                    <input type="checkbox" class="form-check-input" name="remember_me" id="remember_me">
+                    <label class="form-check-label" for="remember_me">
+                        <i class="fas fa-check-circle me-1"></i> Remember me
+                    </label>
+                </div>
+                
                 <div class="mb-3">
                     <button type="submit" class="btn btn-login">
-                        <i class="fas fa-sign-in-alt me-2"></i> Login
+                        <i class="fas fa-sign-in-alt me-2"></i> Sign In
                     </button>
                 </div>
-
             </form>
-
+            
+            <div class="login-footer">
+                <p>&copy; <?php echo date('Y'); ?> Ecommer.in - All Rights Reserved</p>
+            </div>
+        </div>
+        <div class="brand-tagline">
+            <p>Secure Login | Multi-role Access</p>
         </div>
     </div>
 
-    <!-- Bootstrap JS Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     
     <script>
@@ -402,7 +583,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             document.querySelector('input[name="username"]').focus();
         });
         
-        // Simple form validation
+        // Form validation
         document.getElementById('loginForm').addEventListener('submit', function(e) {
             const username = document.querySelector('input[name="username"]').value.trim();
             const password = document.getElementById('password').value.trim();

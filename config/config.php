@@ -1,9 +1,9 @@
 <?php
 // Database Configuration
-$db_host = "localhost";
-$db_user = "u966043993_agencydemo";
-$db_pass = "Ariharan@2025";
-$db_name = "u966043993_agencydemo";
+$db_host = "srv1740.hstgr.io";
+$db_user = "u966043993_vadivalaki";
+$db_pass = "Vadivalaki@29";
+$db_name = "u966043993_vadivalaki";
 
 // Create Database Connection
 $conn = mysqli_connect($db_host, $db_user, $db_pass, $db_name);

@@ -1,410 +1,494 @@
+<?php
+session_start();
+$currentPage = 'add-product';
+include('config/config.php');
+
+if (!isset($conn) || !($conn instanceof mysqli)) {
+    die('Database connection not available. Please check config/config.php');
+}
+
+if (!function_exists('h')) {
+    function h($value) {
+        return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+if (!function_exists('generateProductCode')) {
+    function generateProductCode(mysqli $conn) {
+        do {
+            $code = 'PROD' . date('ymd') . str_pad((string) random_int(0, 999), 3, '0', STR_PAD_LEFT);
+            $stmt = mysqli_prepare($conn, "SELECT id FROM products WHERE product_code = ? LIMIT 1");
+            mysqli_stmt_bind_param($stmt, 's', $code);
+            mysqli_stmt_execute($stmt);
+            mysqli_stmt_store_result($stmt);
+            $exists = mysqli_stmt_num_rows($stmt) > 0;
+            mysqli_stmt_close($stmt);
+        } while ($exists);
+
+        return $code;
+    }
+}
+
+$hasHsnCode = false;
+$colCheck = mysqli_query($conn, "SHOW COLUMNS FROM products LIKE 'hsn_code'");
+if ($colCheck && mysqli_num_rows($colCheck) > 0) {
+    $hasHsnCode = true;
+}
+if ($colCheck) {
+    mysqli_free_result($colCheck);
+}
+
+$message = '';
+$error = '';
+$isEdit = false;
+$productId = isset($_GET['edit']) ? (int) $_GET['edit'] : 0;
+
+$product = [
+    'id' => 0,
+    'product_code' => '',
+    'product_name' => '',
+    'category_id' => '',
+    'brand_id' => '',
+    'stock_price' => '0.00',
+    'customer_price' => '0.00',
+    'quantity' => '0',
+    'profit' => '0.00',
+    'profit_percentage' => '0.00',
+    'hsn_code' => '',
+    'description' => '',
+    'status' => 'active',
+];
+
+if ($productId > 0) {
+    $stmt = mysqli_prepare($conn, "SELECT id, product_code, product_name, category_id, brand_id, stock_price, customer_price, quantity, profit, profit_percentage, " . ($hasHsnCode ? "hsn_code, " : "") . "description, status FROM products WHERE id = ? LIMIT 1");
+    mysqli_stmt_bind_param($stmt, 'i', $productId);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+    if ($row = mysqli_fetch_assoc($result)) {
+        $product = $row;
+        $isEdit = true;
+    } else {
+        $error = 'Product not found.';
+    }
+    mysqli_stmt_close($stmt);
+}
+
+$categories = [];
+$catResult = mysqli_query($conn, "SELECT id, category_name FROM categories WHERE status = 'active' ORDER BY category_name ASC");
+if ($catResult) {
+    while ($row = mysqli_fetch_assoc($catResult)) {
+        $categories[] = $row;
+    }
+}
+
+$brands = [];
+$brandResult = mysqli_query($conn, "SELECT id, brand_name FROM brands WHERE status = 'active' ORDER BY brand_name ASC");
+if ($brandResult) {
+    while ($row = mysqli_fetch_assoc($brandResult)) {
+        $brands[] = $row;
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $postedId = isset($_POST['product_id']) ? (int) $_POST['product_id'] : 0;
+    $isEdit = $postedId > 0;
+
+    $product['id'] = $postedId;
+    $product['product_code'] = trim($_POST['product_code'] ?? '');
+    $product['product_name'] = trim($_POST['product_name'] ?? '');
+    $product['hsn_code'] = trim($_POST['hsn_code'] ?? '');
+    $product['category_id'] = trim($_POST['category_id'] ?? '');
+    $product['brand_id'] = trim($_POST['brand_id'] ?? '');
+    $product['stock_price'] = trim($_POST['stock_price'] ?? '0');
+    $product['customer_price'] = trim($_POST['customer_price'] ?? '0');
+    $product['quantity'] = trim($_POST['quantity'] ?? '0');
+    $product['description'] = trim($_POST['description'] ?? '');
+    $product['status'] = trim($_POST['status'] ?? 'active');
+
+    if ($product['product_code'] === '') {
+        $product['product_code'] = generateProductCode($conn);
+    }
+
+    $categoryId = ($product['category_id'] !== '') ? (int) $product['category_id'] : null;
+    $brandId = ($product['brand_id'] !== '') ? (int) $product['brand_id'] : null;
+    $stockPrice = (float) $product['stock_price'];
+    $customerPrice = (float) $product['customer_price'];
+    $quantity = (int) $product['quantity'];
+    $profit = $customerPrice - $stockPrice;
+    $profitPercentage = $stockPrice > 0 ? (($profit / $stockPrice) * 100) : 0;
+    $product['hsn_code'] = substr(preg_replace('/[^A-Za-z0-9\-]/', '', $product['hsn_code']), 0, 20);
+
+    $product['profit'] = number_format($profit, 2, '.', '');
+    $product['profit_percentage'] = number_format($profitPercentage, 2, '.', '');
+
+    $validStatuses = ['active', 'inactive', 'out_of_stock'];
+
+    if ($product['product_name'] === '') {
+        $error = 'Product name is required.';
+    } elseif (!in_array($product['status'], $validStatuses, true)) {
+        $error = 'Invalid product status selected.';
+    } elseif ($stockPrice < 0 || $customerPrice < 0) {
+        $error = 'Prices cannot be negative.';
+    } elseif ($quantity < 0) {
+        $error = 'Quantity cannot be negative.';
+    } else {
+        $checkSql = $isEdit
+            ? "SELECT id FROM products WHERE product_code = ? AND id != ? LIMIT 1"
+            : "SELECT id FROM products WHERE product_code = ? LIMIT 1";
+
+        $checkStmt = mysqli_prepare($conn, $checkSql);
+        if ($isEdit) {
+            mysqli_stmt_bind_param($checkStmt, 'si', $product['product_code'], $postedId);
+        } else {
+            mysqli_stmt_bind_param($checkStmt, 's', $product['product_code']);
+        }
+        mysqli_stmt_execute($checkStmt);
+        mysqli_stmt_store_result($checkStmt);
+        $duplicateCode = mysqli_stmt_num_rows($checkStmt) > 0;
+        mysqli_stmt_close($checkStmt);
+
+        if ($duplicateCode) {
+            $error = 'Product code already exists. Please use another code.';
+        } else {
+            if ($isEdit) {
+                if ($hasHsnCode) {
+                    $sql = "UPDATE products SET product_code = ?, product_name = ?, category_id = ?, brand_id = ?, stock_price = ?, customer_price = ?, quantity = ?, profit = ?, profit_percentage = ?, hsn_code = ?, description = ?, status = ? WHERE id = ?";
+                    $stmt = mysqli_prepare($conn, $sql);
+                    mysqli_stmt_bind_param(
+                        $stmt,
+                        'ssiiddiddsssi',
+                        $product['product_code'],
+                        $product['product_name'],
+                        $categoryId,
+                        $brandId,
+                        $stockPrice,
+                        $customerPrice,
+                        $quantity,
+                        $profit,
+                        $profitPercentage,
+                        $product['hsn_code'],
+                        $product['description'],
+                        $product['status'],
+                        $postedId
+                    );
+                } else {
+                    $sql = "UPDATE products SET product_code = ?, product_name = ?, category_id = ?, brand_id = ?, stock_price = ?, customer_price = ?, quantity = ?, profit = ?, profit_percentage = ?, description = ?, status = ? WHERE id = ?";
+                    $stmt = mysqli_prepare($conn, $sql);
+                    mysqli_stmt_bind_param(
+                        $stmt,
+                        'ssiiddiddssi',
+                        $product['product_code'],
+                        $product['product_name'],
+                        $categoryId,
+                        $brandId,
+                        $stockPrice,
+                        $customerPrice,
+                        $quantity,
+                        $profit,
+                        $profitPercentage,
+                        $product['description'],
+                        $product['status'],
+                        $postedId
+                    );
+                }
+            } else {
+                if ($hasHsnCode) {
+                    $sql = "INSERT INTO products (product_code, product_name, category_id, brand_id, stock_price, customer_price, quantity, profit, profit_percentage, hsn_code, description, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    $stmt = mysqli_prepare($conn, $sql);
+                    mysqli_stmt_bind_param(
+                        $stmt,
+                        'ssiiddiddsss',
+                        $product['product_code'],
+                        $product['product_name'],
+                        $categoryId,
+                        $brandId,
+                        $stockPrice,
+                        $customerPrice,
+                        $quantity,
+                        $profit,
+                        $profitPercentage,
+                        $product['hsn_code'],
+                        $product['description'],
+                        $product['status']
+                    );
+                } else {
+                    $sql = "INSERT INTO products (product_code, product_name, category_id, brand_id, stock_price, customer_price, quantity, profit, profit_percentage, description, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    $stmt = mysqli_prepare($conn, $sql);
+                    mysqli_stmt_bind_param(
+                        $stmt,
+                        'ssiiddiddss',
+                        $product['product_code'],
+                        $product['product_name'],
+                        $categoryId,
+                        $brandId,
+                        $stockPrice,
+                        $customerPrice,
+                        $quantity,
+                        $profit,
+                        $profitPercentage,
+                        $product['description'],
+                        $product['status']
+                    );
+                }
+            }
+
+            if ($stmt && mysqli_stmt_execute($stmt)) {
+                mysqli_stmt_close($stmt);
+                $redirectMessage = $isEdit ? 'Product updated successfully.' : 'Product added successfully.';
+                header('Location: products-list.php?success=' . urlencode($redirectMessage));
+                exit;
+            }
+
+            $error = 'Failed to save product. ' . mysqli_error($conn);
+            if ($stmt) {
+                mysqli_stmt_close($stmt);
+            }
+        }
+    }
+}
+?>
 <!doctype html>
 <html lang="en">
-
-<?php include('includes/head.php')?>
-
+<?php include('includes/head.php'); ?>
 <body data-sidebar="dark">
-
-<!-- Loader -->
-<?php include('includes/pre-loader.php')?>
-
-<!-- Begin page -->
+<?php include('includes/pre-loader.php'); ?>
 <div id="layout-wrapper">
+    <?php include('includes/topbar.php'); ?>
+    <div class="vertical-menu"><div data-simplebar class="h-100"><?php include('includes/sidebar.php'); ?></div></div>
 
-<?php include('includes/topbar.php')?>    
-
-    <!-- ========== Left Sidebar Start ========== -->
-    <div class="vertical-menu">
-
-        <div data-simplebar class="h-100">
-
-            <!--- Sidemenu -->
-            <?php include('includes/sidebar.php')?>
-            <!-- Sidebar -->
-        </div>
-    </div>
-    <!-- Left Sidebar End -->
-
-    <!-- ============================================================== -->
-    <!-- Start right Content here -->
-    <!-- ============================================================== -->
     <div class="main-content">
         <div class="page-content">
-           
             <div class="container-fluid">
+                <div class="row mb-3">
+                    <div class="col-12 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <div>
+                            <h4 class="mb-1"><?php echo $isEdit ? 'Edit Product' : 'Add New Product'; ?></h4>
+                            <p class="text-muted mb-0">Create and manage product master details.</p>
+                        </div>
+                        <a href="products-list.php" class="btn btn-outline-primary">
+                            <i class="mdi mdi-format-list-bulleted me-1"></i> Manage Products
+                        </a>
+                    </div>
+                </div>
 
+                <?php if ($error !== ''): ?>
+                    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                        <?php echo h($error); ?>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                <?php endif; ?>
 
-                <!-- end page title -->
+                <?php if ($message !== ''): ?>
+                    <div class="alert alert-success alert-dismissible fade show" role="alert">
+                        <?php echo h($message); ?>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                <?php endif; ?>
 
-                <?php
-                // Database connection and form processing
-                if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-                    include('config/config.php');
-                    
-                    // Collect form data with validation
-                    $product_name = mysqli_real_escape_string($conn, $_POST['product_name']);
-                    $category_id = mysqli_real_escape_string($conn, $_POST['category_id']);
-                    $brand_id = mysqli_real_escape_string($conn, $_POST['brand_id']);
-                    $stock_price = mysqli_real_escape_string($conn, $_POST['stock_price']);
-                    $customer_price = mysqli_real_escape_string($conn, $_POST['customer_price']);
-                    $quantity = mysqli_real_escape_string($conn, $_POST['quantity']);
-                    $description = mysqli_real_escape_string($conn, $_POST['description']);
-                    $status = mysqli_real_escape_string($conn, $_POST['status']);
-                    
-                    // Calculate profit
-                    $profit = $customer_price - $stock_price;
-                    $profit_percentage = ($stock_price > 0) ? (($profit / $stock_price) * 100) : 0;
-                    
-                    // Generate product code
-                    $product_code = 'PROD' . date('ym') . str_pad(rand(1, 999), 3, '0', STR_PAD_LEFT);
-                    
-                    // Check if product already exists
-                    $check_sql = "SELECT id FROM products WHERE product_name = '$product_name'";
-                    $check_result = mysqli_query($conn, $check_sql);
-                    
-                    if (mysqli_num_rows($check_result) > 0) {
-                        echo '<div class="alert alert-warning alert-dismissible fade show" role="alert">
-                                <i class="mdi mdi-alert-circle-outline me-2"></i>
-                                Product already exists!
-                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                            </div>';
-                    } else {
-                        // Insert into database
-                        $sql = "INSERT INTO products (
-                            product_code, product_name, category_id, brand_id, 
-                            stock_price, customer_price, quantity, profit, profit_percentage,
-                            description, status, created_at
-                        ) VALUES (
-                            '$product_code', '$product_name', '$category_id', '$brand_id',
-                            '$stock_price', '$customer_price', '$quantity', '$profit', '$profit_percentage',
-                            '$description', '$status', NOW()
-                        )";
-                        
-                        if (mysqli_query($conn, $sql)) {
-                            $product_id = mysqli_insert_id($conn);
-                            
-                            echo '<div class="alert alert-success alert-dismissible fade show" role="alert">
-                                    <i class="mdi mdi-check-all me-2"></i>
-                                    Product added successfully! Product Code: ' . $product_code . '
-                                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                                </div>';
-                            
-                            // Clear form after successful submission
-                            echo '<script>
-                                setTimeout(function() {
-                                    document.querySelector("form").reset();
-                                    document.getElementById("profitAmount").textContent = "₹0.00";
-                                    document.getElementById("profitPercentage").textContent = "0%";
-                                    document.getElementById("totalStockValue").textContent = "₹0.00";
-                                }, 100);
-                            </script>';
-                        } else {
-                            echo '<div class="alert alert-danger alert-dismissible fade show" role="alert">
-                                    <i class="mdi mdi-block-helper me-2"></i>
-                                    Error: ' . mysqli_error($conn) . '
-                                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                                </div>';
-                        }
-                    }
-                    
-                    mysqli_close($conn);
-                }
-                ?>
+                <?php if (!$hasHsnCode): ?>
+                    <div class="alert alert-warning" role="alert">
+                        HSN Code field is added in the form, but your current <code>products</code> table does not yet have the <code>hsn_code</code> column. Add the column in MySQL to save HSN values permanently.
+                    </div>
+                <?php endif; ?>
 
                 <div class="row">
-                    <div class="col-lg-12">
+                    <div class="col-xl-8">
                         <div class="card">
-                            <div class="card-header">
-                                <h4 class="card-title">Product Information</h4>
-                            </div>
                             <div class="card-body">
-                                <form method="POST" action="add-product.php" id="productForm">
+                                <form method="post" autocomplete="off">
+                                    <input type="hidden" name="product_id" value="<?php echo (int) $product['id']; ?>">
+
                                     <div class="row">
-                                        <!-- Product Basic Information -->
-                                        <div class="col-md-6">
-                                            <div class="mb-3">
-                                                <label class="form-label">Product Name <span class="text-danger">*</span></label>
-                                                <input type="text" class="form-control" name="product_name" required 
-                                                       placeholder="e.g., Bisleri Mineral Water 1L, Amul Milk 500ml" maxlength="150">
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">Product Code</label>
+                                            <div class="input-group">
+                                                <input type="text" class="form-control" name="product_code" id="product_code" value="<?php echo h($product['product_code']); ?>" placeholder="Auto generated if empty">
+                                                <button type="button" class="btn btn-light border" id="generateCodeBtn">Generate</button>
                                             </div>
                                         </div>
-                                        <div class="col-md-6">
-                                            <div class="mb-3">
-                                                <label class="form-label">Category <span class="text-danger">*</span></label>
-                                                <select class="form-select" name="category_id" required id="categorySelect">
-                                                    <option value="">Select Category</option>
-                                                    <?php
-                                                    include('config/config.php');
-                                                    $cat_sql = "SELECT id, category_name FROM categories WHERE status = 'active' ORDER BY category_name";
-                                                    $cat_result = mysqli_query($conn, $cat_sql);
-                                                    while ($cat = mysqli_fetch_assoc($cat_result)) {
-                                                        echo '<option value="' . $cat['id'] . '">' . $cat['category_name'] . '</option>';
-                                                    }
-                                                    ?>
-                                                </select>
-                                            </div>
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">Product Name <span class="text-danger">*</span></label>
+                                            <input type="text" class="form-control" name="product_name" value="<?php echo h($product['product_name']); ?>" required>
                                         </div>
                                     </div>
 
                                     <div class="row">
-                                        <div class="col-md-6">
-                                            <div class="mb-3">
-                                                <label class="form-label">Brand</label>
-                                                <select class="form-select" name="brand_id" id="brandSelect">
-                                                    <option value="">Select Brand</option>
-                                                    <?php
-                                                    $brand_sql = "SELECT id, brand_name FROM brands WHERE status = 'active' ORDER BY brand_name";
-                                                    $brand_result = mysqli_query($conn, $brand_sql);
-                                                    while ($brand = mysqli_fetch_assoc($brand_result)) {
-                                                        echo '<option value="' . $brand['id'] . '">' . $brand['brand_name'] . '</option>';
-                                                    }
-                                                    mysqli_close($conn);
-                                                    ?>
-                                                </select>
-                                            </div>
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">HSN Code</label>
+                                            <input type="text" class="form-control" name="hsn_code" maxlength="20" value="<?php echo h($product['hsn_code']); ?>" placeholder="Enter HSN code">
                                         </div>
-                                        <div class="col-md-6">
-                                            <!-- This column is now empty since unit type is removed -->
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">Category</label>
+                                            <select class="form-select" name="category_id">
+                                                <option value="">Select Category</option>
+                                                <?php foreach ($categories as $category): ?>
+                                                    <option value="<?php echo (int) $category['id']; ?>" <?php echo ((string) $product['category_id'] === (string) $category['id']) ? 'selected' : ''; ?>>
+                                                        <?php echo h($category['category_name']); ?>
+                                                    </option>
+                                                <?php endforeach; ?>
+                                            </select>
                                         </div>
-                                    </div>
-
-                                    <!-- Pricing Information -->
-                                    <div class="row mt-3">
-                                        <div class="col-md-6">
-                                            <div class="mb-3">
-                                                <label class="form-label">Stock Price (Cost) <span class="text-danger">*</span></label>
-                                                <div class="input-group">
-                                                    <span class="input-group-text">₹</span>
-                                                    <input type="number" class="form-control" name="stock_price" required 
-                                                           placeholder="Your purchase cost" min="0" step="0.01" id="stockPrice">
-                                                </div>
-                                                <small class="text-muted">Price you pay to purchase</small>
-                                            </div>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <div class="mb-3">
-                                                <label class="form-label">Customer Price (Selling) <span class="text-danger">*</span></label>
-                                                <div class="input-group">
-                                                    <span class="input-group-text">₹</span>
-                                                    <input type="number" class="form-control" name="customer_price" required 
-                                                           placeholder="Selling price to customers" min="0" step="0.01" id="customerPrice">
-                                                </div>
-                                                <small class="text-muted">Price customers pay</small>
-                                            </div>
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">Brand</label>
+                                            <select class="form-select" name="brand_id">
+                                                <option value="">Select Brand</option>
+                                                <?php foreach ($brands as $brand): ?>
+                                                    <option value="<?php echo (int) $brand['id']; ?>" <?php echo ((string) $product['brand_id'] === (string) $brand['id']) ? 'selected' : ''; ?>>
+                                                        <?php echo h($brand['brand_name']); ?>
+                                                    </option>
+                                                <?php endforeach; ?>
+                                            </select>
                                         </div>
                                     </div>
 
-                                    <!-- Quantity Information -->
-                                    <div class="row mt-3">
-                                        <div class="col-md-6">
-                                            <div class="mb-3">
-                                                <label class="form-label">Quantity <span class="text-danger">*</span></label>
-                                                <input type="number" class="form-control" name="quantity" required 
-                                                       placeholder="Stock quantity" min="0" step="1" id="quantity">
-                                                <small class="text-muted">Current stock available</small>
-                                            </div>
+                                    <div class="row">
+                                        <div class="col-md-4 mb-3">
+                                            <label class="form-label">Stock Price <span class="text-danger">*</span></label>
+                                            <input type="number" step="0.01" min="0" class="form-control calc-field" name="stock_price" id="stock_price" value="<?php echo h($product['stock_price']); ?>" required>
                                         </div>
-                                        <div class="col-md-6">
-                                            <div class="mb-3">
-                                                <label class="form-label">Status</label>
-                                                <select class="form-select" name="status">
-                                                    <option value="active" selected>Active</option>
-                                                    <option value="inactive">Inactive</option>
-                                                    <option value="out_of_stock">Out of Stock</option>
-                                                </select>
-                                            </div>
+                                        <div class="col-md-4 mb-3">
+                                            <label class="form-label">Customer Price <span class="text-danger">*</span></label>
+                                            <input type="number" step="0.01" min="0" class="form-control calc-field" name="customer_price" id="customer_price" value="<?php echo h($product['customer_price']); ?>" required>
+                                        </div>
+                                        <div class="col-md-4 mb-3">
+                                            <label class="form-label">Opening Quantity <span class="text-danger">*</span></label>
+                                            <input type="number" min="0" class="form-control" name="quantity" value="<?php echo h($product['quantity']); ?>" required>
                                         </div>
                                     </div>
 
-                                    <!-- Description -->
-                                    <div class="row mt-3">
-                                        <div class="col-md-12">
-                                            <div class="mb-3">
-                                                <label class="form-label">Description</label>
-                                                <textarea class="form-control" name="description" rows="3" 
-                                                          placeholder="Product description, features, usage instructions, etc." maxlength="500"></textarea>
+                                    <div class="row">
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">Profit</label>
+                                            <input type="text" class="form-control" id="profit" value="<?php echo h($product['profit']); ?>" readonly>
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">Profit Percentage</label>
+                                            <input type="text" class="form-control" id="profit_percentage" value="<?php echo h($product['profit_percentage']); ?>" readonly>
+                                        </div>
+                                    </div>
+
+                                    <div class="row">
+                                        <div class="col-md-6 mb-3">
+                                            <label class="form-label">Status</label>
+                                            <select class="form-select" name="status">
+                                                <option value="active" <?php echo $product['status'] === 'active' ? 'selected' : ''; ?>>Active</option>
+                                                <option value="inactive" <?php echo $product['status'] === 'inactive' ? 'selected' : ''; ?>>Inactive</option>
+                                                <option value="out_of_stock" <?php echo $product['status'] === 'out_of_stock' ? 'selected' : ''; ?>>Out of Stock</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6 mb-3 d-flex align-items-end">
+                                            <div class="w-100 p-3 rounded bg-light border">
+                                                <div class="fw-semibold">Quick Note</div>
+                                                <small class="text-muted">Product code is unique. Profit and margin are auto calculated from stock price and customer price. HSN code is supported on this form.</small>
                                             </div>
                                         </div>
                                     </div>
 
-                                    <!-- Price Summary Card -->
-                                    <div class="row mt-4">
-                                        <div class="col-md-12">
-                                            <div class="card border-primary">
-                                                <div class="card-header bg-primary-subtle">
-                                                    <h5 class="card-title mb-0 text-primary">
-                                                        <i class="mdi mdi-calculator me-1"></i> Profit & Stock Summary
-                                                    </h5>
-                                                </div>
-                                                <div class="card-body">
-                                                    <div class="row">
-                                                        <div class="col-md-3">
-                                                            <div class="text-center">
-                                                                <h6 class="text-muted">Profit Per Unit</h6>
-                                                                <h4 class="text-success" id="profitAmount">₹0.00</h4>
-                                                            </div>
-                                                        </div>
-                                                        <div class="col-md-3">
-                                                            <div class="text-center">
-                                                                <h6 class="text-muted">Profit Margin</h6>
-                                                                <h4 class="text-primary" id="profitPercentage">0%</h4>
-                                                            </div>
-                                                        </div>
-                                                        <div class="col-md-3">
-                                                            <div class="text-center">
-                                                                <h6 class="text-muted">Total Stock Value</h6>
-                                                                <h4 class="text-warning" id="totalStockValue">₹0.00</h4>
-                                                            </div>
-                                                        </div>
-                                                        <div class="col-md-3">
-                                                            <div class="text-center">
-                                                                <h6 class="text-muted">Total Selling Value</h6>
-                                                                <h4 class="text-info" id="totalSellingValue">₹0.00</h4>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Description</label>
+                                        <textarea class="form-control" name="description" rows="4" placeholder="Optional product description"><?php echo h($product['description']); ?></textarea>
                                     </div>
 
-                                    <div class="mt-4">
-                                        <button type="submit" class="btn btn-primary w-md">
-                                            <i class="mdi mdi-plus-circle-outline me-1"></i> Add Product
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        <button type="submit" class="btn btn-primary">
+                                            <i class="mdi mdi-content-save me-1"></i>
+                                            <?php echo $isEdit ? 'Update Product' : 'Save Product'; ?>
                                         </button>
-                                        <button type="reset" class="btn btn-secondary ms-2">
-                                            <i class="mdi mdi-refresh me-1"></i> Reset
-                                        </button>
-                                        <a href="products-list.php" class="btn btn-light ms-2">
-                                            <i class="mdi mdi-arrow-left me-1"></i> Back to Products
-                                        </a>
+                                        <a href="products-list.php" class="btn btn-secondary">Cancel</a>
+                                        <?php if (!$isEdit): ?>
+                                            <button type="reset" class="btn btn-light border">Reset</button>
+                                        <?php endif; ?>
                                     </div>
                                 </form>
                             </div>
                         </div>
                     </div>
+
+                    <div class="col-xl-4">
+                        <div class="card">
+                            <div class="card-body">
+                                <h5 class="card-title">Available Categories</h5>
+                                <?php if (!empty($categories)): ?>
+                                    <ul class="list-group list-group-flush">
+                                        <?php foreach ($categories as $category): ?>
+                                            <li class="list-group-item px-0 d-flex justify-content-between align-items-center">
+                                                <?php echo h($category['category_name']); ?>
+                                                <span class="badge bg-soft-primary text-primary"><?php echo (int) $category['id']; ?></span>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                <?php else: ?>
+                                    <p class="text-muted mb-0">No active categories found.</p>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-body">
+                                <h5 class="card-title">Available Brands</h5>
+                                <?php if (!empty($brands)): ?>
+                                    <ul class="list-group list-group-flush">
+                                        <?php foreach ($brands as $brand): ?>
+                                            <li class="list-group-item px-0 d-flex justify-content-between align-items-center">
+                                                <?php echo h($brand['brand_name']); ?>
+                                                <span class="badge bg-soft-success text-success"><?php echo (int) $brand['id']; ?></span>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                <?php else: ?>
+                                    <p class="text-muted mb-0">No active brands found.</p>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-
             </div>
-            <!-- container-fluid -->
         </div>
-        <!-- End Page-content -->
-
-        <?php include('includes/footer.php')?>
+        <?php include('includes/footer.php'); ?>
     </div>
-    <!-- end main content-->
-
 </div>
-<!-- END layout-wrapper -->
 
-<!-- Right Sidebar -->
-<?php include('includes/rightbar.php')?>
-<!-- /Right-bar -->
-
-<!-- JAVASCRIPT -->
-<?php include('includes/scripts.php')?>
-
+<?php include('includes/rightbar.php'); ?>
+<?php include('includes/scripts.php'); ?>
 <script>
-// Function to calculate profit and stock values
-function calculateSummary() {
-    const stockPrice = parseFloat(document.getElementById('stockPrice').value) || 0;
-    const customerPrice = parseFloat(document.getElementById('customerPrice').value) || 0;
-    const quantity = parseFloat(document.getElementById('quantity').value) || 0;
-    
-    // Calculate profit per unit
-    const profitPerUnit = customerPrice - stockPrice;
-    document.getElementById('profitAmount').textContent = '₹' + profitPerUnit.toFixed(2);
-    
-    // Calculate profit percentage
-    const profitPercentage = stockPrice > 0 ? ((profitPerUnit / stockPrice) * 100) : 0;
-    document.getElementById('profitPercentage').textContent = profitPercentage.toFixed(1) + '%';
-    
-    // Calculate total stock value (at cost)
-    const totalStockValue = quantity * stockPrice;
-    document.getElementById('totalStockValue').textContent = '₹' + totalStockValue.toFixed(2);
-    
-    // Calculate total selling value
-    const totalSellingValue = quantity * customerPrice;
-    document.getElementById('totalSellingValue').textContent = '₹' + totalSellingValue.toFixed(2);
-    
-    // Color coding for profit
-    const profitAmountElem = document.getElementById('profitAmount');
-    const profitPercentageElem = document.getElementById('profitPercentage');
-    
-    if (profitPerUnit < 0) {
-        profitAmountElem.className = 'text-danger';
-        profitPercentageElem.className = 'text-danger';
-    } else if (profitPerUnit > 0) {
-        profitAmountElem.className = 'text-success';
-        profitPercentageElem.className = 'text-success';
-    } else {
-        profitAmountElem.className = 'text-muted';
-        profitPercentageElem.className = 'text-muted';
+(function () {
+    const stockInput = document.getElementById('stock_price');
+    const customerInput = document.getElementById('customer_price');
+    const profitInput = document.getElementById('profit');
+    const profitPercentageInput = document.getElementById('profit_percentage');
+    const codeInput = document.getElementById('product_code');
+    const generateBtn = document.getElementById('generateCodeBtn');
+
+    function calculateProfit() {
+        const stock = parseFloat(stockInput.value || 0);
+        const customer = parseFloat(customerInput.value || 0);
+        const profit = customer - stock;
+        const percentage = stock > 0 ? ((profit / stock) * 100) : 0;
+
+        profitInput.value = profit.toFixed(2);
+        profitPercentageInput.value = percentage.toFixed(2) + '%';
     }
-}
 
-// Add event listeners for real-time calculation
-document.addEventListener('DOMContentLoaded', function() {
-    // Listen for changes in stock price
-    document.getElementById('stockPrice').addEventListener('input', calculateSummary);
-    
-    // Listen for changes in customer price
-    document.getElementById('customerPrice').addEventListener('input', calculateSummary);
-    
-    // Listen for changes in quantity
-    document.getElementById('quantity').addEventListener('input', calculateSummary);
-    
-    // Form validation
-    document.getElementById('productForm').addEventListener('submit', function(e) {
-        const productName = document.querySelector('input[name="product_name"]').value;
-        const stockPrice = parseFloat(document.getElementById('stockPrice').value) || 0;
-        const customerPrice = parseFloat(document.getElementById('customerPrice').value) || 0;
-        const quantity = parseFloat(document.getElementById('quantity').value) || 0;
-        const category = document.getElementById('categorySelect').value;
-        
-        // Validate required fields
-        if (productName.trim().length < 2) {
-            alert('Product name must be at least 2 characters long');
-            e.preventDefault();
-            return false;
-        }
-        
-        if (!category) {
-            alert('Please select a category');
-            e.preventDefault();
-            return false;
-        }
-        
-        if (stockPrice <= 0) {
-            alert('Stock price must be greater than 0');
-            e.preventDefault();
-            return false;
-        }
-        
-        if (customerPrice <= 0) {
-            alert('Customer price must be greater than 0');
-            e.preventDefault();
-            return false;
-        }
-        
-        if (customerPrice < stockPrice) {
-            if (!confirm('Warning: Customer price is lower than stock price. You will make a loss. Continue anyway?')) {
-                e.preventDefault();
-                return false;
-            }
-        }
-        
-        if (quantity < 0) {
-            alert('Quantity cannot be negative');
-            e.preventDefault();
-            return false;
-        }
-        
-        return true;
+    function generateCode() {
+        const now = new Date();
+        const year = String(now.getFullYear()).slice(-2);
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+        codeInput.value = 'PROD' + year + month + day + random;
+    }
+
+    document.querySelectorAll('.calc-field').forEach(function (input) {
+        input.addEventListener('input', calculateProfit);
     });
-});
+
+    if (generateBtn) {
+        generateBtn.addEventListener('click', generateCode);
+    }
+
+    calculateProfit();
+})();
 </script>
-
 </body>
-
 </html>
+<?php mysqli_close($conn); ?>

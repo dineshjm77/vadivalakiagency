@@ -20,16 +20,16 @@
         <li class="menu-title">Management</li>
 
         <li>
-            <a href="javascript: void(0);" class="has-arrow waves-effect">
-                <i class="dripicons-user-group"></i>
-                <span>User Management</span>
-            </a>
-            <ul class="sub-menu" aria-expanded="false">
-                <li><a href="lineman-list.php">Line Men List</a></li>
-                <li><a href="add-lineman.php">Add New Line Man</a></li>
-                <li><a href="assign-lineman.php">Assign Line Men</a></li>
-            </ul>
-        </li>
+    <a href="javascript: void(0);" class="has-arrow waves-effect">
+        <i class="dripicons-user-group"></i>
+        <span>User Management</span>
+    </a>
+    <ul class="sub-menu" aria-expanded="false">
+        <li><a href="manage-users.php">Manage All Users</a></li>
+        <li><a href="add-user.php">Add New User</a></li>
+        
+    </ul>
+</li>
 
         <li>
             <a href="javascript: void(0);" class="has-arrow waves-effect">
@@ -74,6 +74,17 @@
         </li>
 
         <li>
+    <a href="javascript: void(0);" class="has-arrow waves-effect">
+        <i class="fas fa-hand-holding-usd"></i>
+        <span>Creditors</span>
+    </a>
+    <ul class="sub-menu" aria-expanded="false">
+        <li><a href="creditors-list.php">Creditors List</a></li>
+        <li><a href="add-creditor.php">Add Creditor</a></li>
+    </ul>
+</li>
+
+        <li>
             <a href="javascript: void(0);" class="has-arrow waves-effect">
                 <i class="dripicons-graph-line"></i>
                 <span>Reports & Analytics</span>
@@ -89,6 +100,18 @@
         </li>
 
         <li class="menu-title">Operations</li>
+
+
+        <li>
+    <a href="javascript: void(0);" class="has-arrow waves-effect">
+        <i class="fas fa-shopping-cart"></i>
+        <span>Purchase Orders</span>
+    </a>
+    <ul class="sub-menu" aria-expanded="false">
+        <li><a href="purchase-orders.php">All Purchase Orders</a></li>
+        <li><a href="add-purchase-order.php">Create Purchase Order</a></li>
+    </ul>
+</li>
 
 <!-- Quick Order Option Added Here -->
 <li>
