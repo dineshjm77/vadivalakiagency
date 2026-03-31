@@ -404,7 +404,7 @@
                                                                 <a href="order-edit.php?id=<?php echo $order['id']; ?>" class="btn btn-primary btn-sm" title="Edit">
                                                                     <i class="mdi mdi-pencil"></i>
                                                                 </a>
-                                                                <a href="order-invoice.php?id=<?php echo $order['id']; ?>" class="btn btn-success btn-sm" title="Invoice" target="_blank">
+                                                                <a href="view-invoice-a5.php?id=<?php echo $order['id']; ?>" class="btn btn-success btn-sm" title="Invoice" target="_blank">
                                                                     <i class="mdi mdi-receipt"></i>
                                                                 </a>
                                                                 <a href="?delete_order=<?php echo $order['id']; ?>" 
