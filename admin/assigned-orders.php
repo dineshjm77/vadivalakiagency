@@ -7,7 +7,6 @@ if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['admin'
     exit;
 }
 
-include('includes/head.php');
 $currentPage = 'assigned-orders';
 $selfPage = basename($_SERVER['PHP_SELF'] ?? 'assigned-orders.php');
 
@@ -26,6 +25,9 @@ function ao_clean_phone(string $phone): string {
     return $digits;
 }
 
+/* -------------------------
+   HANDLE AJAX / ACTIONS FIRST
+------------------------- */
 if (isset($_GET['action']) && $_GET['action'] === 'items' && isset($_GET['order_id'])) {
     $order_id = (int)$_GET['order_id'];
     $sql = "SELECT oi.*, p.product_name
@@ -37,11 +39,16 @@ if (isset($_GET['action']) && $_GET['action'] === 'items' && isset($_GET['order_
     mysqli_stmt_bind_param($stmt, "i", $order_id);
     mysqli_stmt_execute($stmt);
     $res = mysqli_stmt_get_result($stmt);
+
     $items = [];
     while ($res && $row = mysqli_fetch_assoc($res)) {
         $items[] = $row;
     }
-    header('Content-Type: application/json');
+
+    if ($res) mysqli_free_result($res);
+    mysqli_stmt_close($stmt);
+
+    header('Content-Type: application/json; charset=utf-8');
     echo json_encode($items);
     exit;
 }
@@ -56,6 +63,8 @@ if (isset($_GET['action']) && isset($_GET['order_id']) && in_array($_GET['action
     mysqli_stmt_execute($checkStmt);
     $checkRes = mysqli_stmt_get_result($checkStmt);
     $orderRow = $checkRes ? mysqli_fetch_assoc($checkRes) : null;
+    if ($checkRes) mysqli_free_result($checkRes);
+    mysqli_stmt_close($checkStmt);
 
     if ($orderRow) {
         if ($action === 'performance') {
@@ -64,6 +73,8 @@ if (isset($_GET['action']) && isset($_GET['order_id']) && in_array($_GET['action
             $updateStmt = mysqli_prepare($conn, $updateSql);
             mysqli_stmt_bind_param($updateStmt, "si", $newStatus, $order_id);
             mysqli_stmt_execute($updateStmt);
+            mysqli_stmt_close($updateStmt);
+
             header('Location: ' . $selfPage . '?msg=performance_updated');
             exit;
         }
@@ -75,11 +86,15 @@ if (isset($_GET['action']) && isset($_GET['order_id']) && in_array($_GET['action
     }
 }
 
+/* -------------------------
+   PAGE DATA
+------------------------- */
 $linemen = [];
 $lmRes = mysqli_query($conn, "SELECT id, full_name, employee_id FROM linemen WHERE status = 'active' ORDER BY full_name ASC");
 while ($lmRes && $row = mysqli_fetch_assoc($lmRes)) {
     $linemen[] = $row;
 }
+if ($lmRes) mysqli_free_result($lmRes);
 
 $linemanId = isset($_GET['lineman_id']) ? (int)$_GET['lineman_id'] : 0;
 $statusFilter = isset($_GET['status']) ? trim((string)$_GET['status']) : 'all';
@@ -149,7 +164,13 @@ while ($res && $row = mysqli_fetch_assoc($res)) {
     $totalCollected += (float)$row['paid_amount'];
     $totalDue += (float)$row['pending_amount'];
 }
+if ($res) mysqli_free_result($res);
+mysqli_stmt_close($stmt);
 ?>
+
+<!doctype html>
+<html lang="en">
+<?php include('includes/head.php'); ?>
 <body data-sidebar="dark">
 <div id="layout-wrapper">
     <?php include('includes/topbar.php'); ?>
@@ -338,11 +359,6 @@ while ($res && $row = mysqli_fetch_assoc($res)) {
                                                         <button type="button" class="btn btn-sm btn-outline-secondary view-items-btn" data-id="<?php echo (int)$order['id']; ?>" data-endpoint="<?php echo htmlspecialchars($selfPage); ?>">
                                                             View Items
                                                         </button>
-                                                        <?php if (strtolower((string)$order['status']) !== 'delivered' || in_array(strtolower((string)$order['payment_status']), ['pending','partial'], true)): ?>
-                                                            <a href="<?php echo htmlspecialchars($selfPage); ?>?action=performance&order_id=<?php echo (int)$order['id']; ?>" class="btn btn-sm btn-outline-warning" onclick="return confirm('Convert this order to performance invoice?');">
-                                                                Performance Invoice
-                                                            </a>
-                                                        <?php endif; ?>
                                                         <a href="quick-order.php?edit_order_id=<?php echo (int)$order['id']; ?>" class="btn btn-sm btn-outline-success">
                                                             Convert To Invoice
                                                         </a>
@@ -405,32 +421,43 @@ document.addEventListener('DOMContentLoaded', function() {
         btn.addEventListener('click', function() {
             const orderId = this.dataset.id;
             const endpoint = this.dataset.endpoint || 'assigned-orders.php';
-            fetch(endpoint + '?action=items&order_id=' + orderId)
-                .then(res => res.json())
-                .then(items => {
-                    const body = document.getElementById('itemsModalBody');
-                    body.innerHTML = '';
-                    if (!items.length) {
-                        body.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No items found.</td></tr>';
-                    } else {
-                        items.forEach(item => {
-                            const tr = document.createElement('tr');
-                            tr.innerHTML = `
-                                <td>${item.product_name || '-'}</td>
-                                <td>${item.quantity || 0}</td>
-                                <td>₹${parseFloat(item.price || 0).toFixed(2)}</td>
-                                <td>₹${parseFloat(item.total || 0).toFixed(2)}</td>
-                            `;
-                            body.appendChild(tr);
-                        });
-                    }
-                    new bootstrap.Modal(document.getElementById('itemsModal')).show();
-                })
-                .catch(() => {
-                    const body = document.getElementById('itemsModalBody');
-                    body.innerHTML = '<tr><td colspan="4" class="text-center text-danger">Failed to load items.</td></tr>';
-                    new bootstrap.Modal(document.getElementById('itemsModal')).show();
-                });
+
+            fetch(endpoint + '?action=items&order_id=' + orderId, {
+                headers: { 'Accept': 'application/json' }
+            })
+            .then(async res => {
+                const text = await res.text();
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    throw new Error(text || 'Invalid JSON response');
+                }
+            })
+            .then(items => {
+                const body = document.getElementById('itemsModalBody');
+                body.innerHTML = '';
+                if (!Array.isArray(items) || !items.length) {
+                    body.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No items found.</td></tr>';
+                } else {
+                    items.forEach(item => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>${item.product_name || '-'}</td>
+                            <td>${item.quantity || 0}</td>
+                            <td>₹${parseFloat(item.price || 0).toFixed(2)}</td>
+                            <td>₹${parseFloat(item.total || 0).toFixed(2)}</td>
+                        `;
+                        body.appendChild(tr);
+                    });
+                }
+                new bootstrap.Modal(document.getElementById('itemsModal')).show();
+            })
+            .catch((err) => {
+                const body = document.getElementById('itemsModalBody');
+                body.innerHTML = '<tr><td colspan="4" class="text-center text-danger">Failed to load items.</td></tr>';
+                console.error('View Items error:', err);
+                new bootstrap.Modal(document.getElementById('itemsModal')).show();
+            });
         });
     });
 });
