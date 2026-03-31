@@ -19,19 +19,16 @@ function customerColumnExists($conn, $table, $column) {
 }
 function formatMoneyCustomer($amount) { return '₹' . number_format((float)$amount, 2); }
 function appendFilterParams($extra = []) { $params = $_GET; foreach ($extra as $k => $v) { $params[$k] = $v; } return http_build_query($params); }
+function customer_import_autoload(): bool {
+    $paths = [__DIR__ . '/vendor/autoload.php', dirname(__DIR__) . '/vendor/autoload.php'];
+    foreach ($paths as $path) { if (file_exists($path)) { require_once $path; return true; } }
+    return class_exists('\\PhpOffice\\PhpSpreadsheet\\IOFactory');
+}
 function customer_norm_header($value): string {
     $value = strtolower(trim((string)$value));
     $value = preg_replace('/\*/', '', $value);
     $value = preg_replace('/[^a-z0-9]+/', '_', $value);
     return trim($value, '_');
-}
-function customer_read_csv_rows(string $filePath): array {
-    $rows = [];
-    if (($handle = fopen($filePath, 'r')) !== false) {
-        while (($data = fgetcsv($handle, 0, ',')) !== false) $rows[] = $data;
-        fclose($handle);
-    }
-    return $rows;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import_customers'])) {
@@ -39,28 +36,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import_customers
         header('Location: customers-list.php?msg=import_error');
         exit;
     }
-    $ext = strtolower(pathinfo($_FILES['import_file']['name'], PATHINFO_EXTENSION));
-    if ($ext !== 'csv') {
-        header('Location: customers-list.php?msg=import_csv_only');
+    if (!customer_import_autoload()) {
+        header('Location: customers-list.php?msg=import_library_missing');
         exit;
     }
 
     try {
-        $rows = customer_read_csv_rows($_FILES['import_file']['tmp_name']);
-        if (count($rows) < 2) throw new Exception('Empty file');
-
+        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($_FILES['import_file']['tmp_name']);
+        $sheet = $spreadsheet->getActiveSheet()->toArray(null, true, true, true);
+        if (count($sheet) < 2) throw new Exception('Empty file');
+        $headerRow = $sheet[2] ?? $sheet[1];
         $headers = [];
-        foreach ($rows[0] as $idx => $value) $headers[$idx] = customer_norm_header($value);
+        foreach ($headerRow as $col => $value) $headers[$col] = customer_norm_header($value);
 
         $hasGstNumber = customerColumnExists($conn, 'customers', 'gst_number');
         $hasGstNo = customerColumnExists($conn, 'customers', 'gst_no');
 
         $inserted = 0; $updated = 0; $skipped = 0;
-        for ($r = 1; $r < count($rows); $r++) {
-            $row = $rows[$r];
+        for ($r = 3; $r <= count($sheet); $r++) {
+            $row = $sheet[$r];
             $data = [];
-            foreach ($headers as $idx => $name) {
-                if ($name !== '') $data[$name] = trim((string)($row[$idx] ?? ''));
+            foreach ($headers as $col => $name) {
+                if ($name !== '') $data[$name] = trim((string)($row[$col] ?? ''));
             }
             if (count(array_filter($data, fn($v) => $v !== '')) === 0) continue;
 
@@ -96,7 +93,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import_customers
             mysqli_stmt_execute($checkStmt);
             $checkRes = mysqli_stmt_get_result($checkStmt);
             $existing = $checkRes ? mysqli_fetch_assoc($checkRes) : null;
-            if ($checkRes) mysqli_free_result($checkRes);
             mysqli_stmt_close($checkStmt);
 
             if ($existing) {
@@ -178,14 +174,10 @@ $gstSelect = $hasGstColumn ? 'c.gst_number' : "'' AS gst_number";
 $statsSql = "SELECT COUNT(*) AS total_customers, SUM(CASE WHEN c.status = 'active' THEN 1 ELSE 0 END) AS active_customers, SUM(CASE WHEN c.status = 'inactive' THEN 1 ELSE 0 END) AS inactive_customers, SUM(CASE WHEN c.status = 'blocked' THEN 1 ELSE 0 END) AS blocked_customers, COALESCE(SUM(c.current_balance), 0) AS total_balance FROM customers c $whereSql";
 $statsResult = mysqli_query($conn, $statsSql);
 $stats = $statsResult ? mysqli_fetch_assoc($statsResult) : ['total_customers'=>0,'active_customers'=>0,'inactive_customers'=>0,'blocked_customers'=>0,'total_balance'=>0];
-if ($statsResult) mysqli_free_result($statsResult);
 
 $beats = [];
 $beatRes = mysqli_query($conn, "SELECT DISTINCT assigned_area FROM customers WHERE assigned_area IS NOT NULL AND assigned_area <> '' ORDER BY assigned_area ASC");
-if ($beatRes) {
-    while ($row = mysqli_fetch_assoc($beatRes)) $beats[] = $row['assigned_area'];
-    mysqli_free_result($beatRes);
-}
+if ($beatRes) while ($row = mysqli_fetch_assoc($beatRes)) $beats[] = $row['assigned_area'];
 
 $listSql = "SELECT c.id,c.customer_code,c.shop_name,c.customer_name,c.customer_contact,c.alternate_contact,c.shop_location,$gstSelect,c.customer_type,c.assigned_area,c.payment_terms,c.credit_limit,c.current_balance,c.total_purchases,c.last_purchase_date,c.status,l.full_name AS lineman_name,z.zone_name FROM customers c LEFT JOIN linemen l ON c.assigned_lineman_id = l.id LEFT JOIN zones z ON c.zone_id = z.id $whereSql ORDER BY CASE WHEN c.assigned_area IS NULL OR c.assigned_area = '' THEN 1 ELSE 0 END,c.assigned_area ASC,c.shop_name ASC,c.customer_name ASC";
 $listResult = mysqli_query($conn, $listSql);
@@ -196,23 +188,6 @@ $currentPage = 'customers-list';
 <!doctype html>
 <html lang="en">
 <?php include('includes/head.php')?>
-<style>
-.customer-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:.5rem}
-.customer-table-wrap table{min-width:980px}
-@media (max-width: 991.98px){
-    .page-title-box .page-title-right{width:100%;justify-content:flex-start!important;display:flex;flex-wrap:wrap;gap:.5rem}
-    .customer-table-wrap{margin:0 -.5rem;padding:0 .5rem}
-}
-@media (max-width: 767.98px){
-    .main-content .container-fluid{padding-left:.6rem;padding-right:.6rem}
-    .card .card-body{padding:.9rem}
-    .customer-table-wrap table{min-width:860px}
-    .customer-list-table th,.customer-list-table td{font-size:12px;white-space:nowrap}
-    .customer-list-table td.address-cell{white-space:normal;min-width:220px}
-    .page-title-box .btn{width:100%}
-    .page-title-box .page-title-right{flex-direction:column;align-items:stretch}
-}
-</style>
 <body data-sidebar="dark"<?php echo $printMode ? ' class="print-page"' : ''; ?>>
 <?php if (!$printMode) { include('includes/pre-loader.php'); } ?>
 <div id="layout-wrapper">
@@ -230,11 +205,11 @@ $currentPage = 'customers-list';
                         <div class="page-title-box d-sm-flex align-items-center justify-content-between">
                             <h4 class="mb-sm-0 font-size-18">Customers / Beat List</h4>
                             <div class="page-title-right d-flex gap-2 flex-wrap">
-                                <a href="customer-import-template.csv" class="btn btn-outline-info">
-                                    <i class="mdi mdi-file-delimited me-1"></i> Download CSV Template
+                                <a href="customer-import-template.xlsx" class="btn btn-outline-info">
+                                    <i class="mdi mdi-file-excel me-1"></i> Download Template
                                 </a>
                                 <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#bulkImportModal">
-                                    <i class="mdi mdi-upload me-1"></i> Bulk Import CSV
+                                    <i class="mdi mdi-upload me-1"></i> Bulk Import
                                 </button>
                                 <a href="add-customer.php" class="btn btn-success"><i class="mdi mdi-plus-circle-outline me-1"></i> Add Customer</a>
                                 <button type="button" class="btn btn-primary" onclick="window.print()"><i class="mdi mdi-printer me-1"></i> Print</button>
@@ -245,11 +220,11 @@ $currentPage = 'customers-list';
 
                 <?php if (isset($_GET['msg'])): ?>
                     <?php if ($_GET['msg'] === 'import_success'): ?>
-                        <div class="alert alert-success alert-dismissible fade show" role="alert">CSV import completed. Inserted: <?php echo (int)($_GET['inserted'] ?? 0); ?>, Updated: <?php echo (int)($_GET['updated'] ?? 0); ?>, Skipped: <?php echo (int)($_GET['skipped'] ?? 0); ?>.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
-                    <?php elseif ($_GET['msg'] === 'import_csv_only'): ?>
-                        <div class="alert alert-danger alert-dismissible fade show" role="alert">Please upload CSV file only.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+                        <div class="alert alert-success alert-dismissible fade show" role="alert">Bulk import completed. Inserted: <?php echo (int)($_GET['inserted'] ?? 0); ?>, Updated: <?php echo (int)($_GET['updated'] ?? 0); ?>, Skipped: <?php echo (int)($_GET['skipped'] ?? 0); ?>.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+                    <?php elseif ($_GET['msg'] === 'import_library_missing'): ?>
+                        <div class="alert alert-danger alert-dismissible fade show" role="alert">PhpSpreadsheet library not found. Install it using Composer before bulk import.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
                     <?php elseif ($_GET['msg'] === 'import_error' || $_GET['msg'] === 'import_failed'): ?>
-                        <div class="alert alert-danger alert-dismissible fade show" role="alert">Unable to import customer CSV file. Please use the template and try again.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+                        <div class="alert alert-danger alert-dismissible fade show" role="alert">Unable to import customer Excel file. Please use the template and try again.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
                     <?php endif; ?>
                 <?php endif; ?>
 
@@ -285,7 +260,7 @@ $currentPage = 'customers-list';
                             <?php if ($hasGstColumn === false): ?><div class="alert alert-warning py-2 px-3 mb-0 no-print">GST column is not in current customers table. GST will show blank until added.</div><?php endif; ?>
                         </div>
 
-                        <div class="customer-table-wrap">
+                        <div class="table-responsive">
                             <table class="table table-bordered align-middle table-nowrap customer-list-table mb-0">
                                 <thead class="table-light">
                                     <tr>
@@ -343,19 +318,19 @@ $currentPage = 'customers-list';
         <div class="modal-content">
             <form method="post" enctype="multipart/form-data">
                 <div class="modal-header">
-                    <h5 class="modal-title">Bulk Import Customers (CSV)</h5>
+                    <h5 class="modal-title">Bulk Import Customers</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <p class="text-muted mb-3">Download the CSV template, fill customer rows, and upload the .csv file here.</p>
+                    <p class="text-muted mb-3">Download the Excel template, fill customer rows, and upload the .xlsx file here.</p>
                     <div class="mb-3">
-                        <label class="form-label">CSV File</label>
-                        <input type="file" class="form-control" name="import_file" accept=".csv,text/csv" required>
+                        <label class="form-label">Excel File</label>
+                        <input type="file" class="form-control" name="import_file" accept=".xlsx,.xls,.csv" required>
                     </div>
                     <div class="small text-muted">Required columns: <strong>shop_name</strong>, <strong>customer_name</strong>, <strong>customer_contact</strong>.</div>
                 </div>
                 <div class="modal-footer">
-                    <a href="customer-import-template.csv" class="btn btn-light border">Download Template</a>
+                    <a href="customer-import-template.xlsx" class="btn btn-light border">Download Template</a>
                     <button type="submit" class="btn btn-success" name="bulk_import_customers" value="1">Import Now</button>
                 </div>
             </form>

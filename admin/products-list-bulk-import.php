@@ -24,22 +24,20 @@ function getColumnExists(mysqli $conn, string $table, string $column): bool {
     if ($res) mysqli_free_result($res);
     return $cache[$key];
 }
+function product_import_autoload(): bool {
+    $paths = [__DIR__ . '/vendor/autoload.php', dirname(__DIR__) . '/vendor/autoload.php'];
+    foreach ($paths as $path) { if (file_exists($path)) { require_once $path; return true; } }
+    return class_exists('\\PhpOffice\\PhpSpreadsheet\\IOFactory');
+}
 function product_norm_header($value): string {
     $value = strtolower(trim((string)$value));
     $value = preg_replace('/\*/', '', $value);
     $value = preg_replace('/[^a-z0-9]+/', '_', $value);
     return trim($value, '_');
 }
-function product_read_csv_rows(string $filePath): array {
-    $rows = [];
-    if (($handle = fopen($filePath, 'r')) !== false) {
-        while (($data = fgetcsv($handle, 0, ',')) !== false) $rows[] = $data;
-        fclose($handle);
-    }
-    return $rows;
-}
 
 $hasHsnCode = getColumnExists($conn, 'products', 'hsn_code');
+
 $message = '';
 $error = '';
 
@@ -65,27 +63,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['quick_action'])) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import_products'])) {
     if (!isset($_FILES['import_file']) || !is_uploaded_file($_FILES['import_file']['tmp_name'])) {
-        header('Location: products-list.php?error=' . urlencode('Please choose a CSV file to import.'));
+        header('Location: products-list.php?error=' . urlencode('Please choose an Excel file to import.'));
         exit;
     }
-    $ext = strtolower(pathinfo($_FILES['import_file']['name'], PATHINFO_EXTENSION));
-    if ($ext !== 'csv') {
-        header('Location: products-list.php?error=' . urlencode('Please upload CSV file only.'));
+    if (!product_import_autoload()) {
+        header('Location: products-list.php?error=' . urlencode('PhpSpreadsheet library not found. Install it using Composer before bulk import.'));
         exit;
     }
 
     try {
-        $rows = product_read_csv_rows($_FILES['import_file']['tmp_name']);
-        if (count($rows) < 2) throw new Exception('Empty file');
+        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($_FILES['import_file']['tmp_name']);
+        $sheet = $spreadsheet->getActiveSheet()->toArray(null, true, true, true);
+        if (count($sheet) < 2) throw new Exception('Empty file');
 
         $headers = [];
-        foreach ($rows[0] as $idx => $value) $headers[$idx] = product_norm_header($value);
+        foreach (($sheet[2] ?? $sheet[1]) as $col => $value) $headers[$col] = product_norm_header($value);
 
         $inserted = 0; $updated = 0; $skipped = 0;
-        for ($r = 1; $r < count($rows); $r++) {
-            $row = $rows[$r];
+        for ($r = 3; $r <= count($sheet); $r++) {
+            $row = $sheet[$r];
             $data = [];
-            foreach ($headers as $idx => $name) if ($name !== '') $data[$name] = trim((string)($row[$idx] ?? ''));
+            foreach ($headers as $col => $name) if ($name !== '') $data[$name] = trim((string)($row[$col] ?? ''));
             if (count(array_filter($data, fn($v) => $v !== '')) === 0) continue;
 
             $productName = $data['product_name'] ?? '';
@@ -162,10 +160,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import_products'
             }
         }
 
-        header('Location: products-list.php?success=' . urlencode("CSV import completed. Inserted: $inserted, Updated: $updated, Skipped: $skipped"));
+        header('Location: products-list.php?success=' . urlencode("Bulk import completed. Inserted: $inserted, Updated: $updated, Skipped: $skipped"));
         exit;
     } catch (Throwable $e) {
-        header('Location: products-list.php?error=' . urlencode('Unable to import product CSV file. Please use the template and try again.'));
+        header('Location: products-list.php?error=' . urlencode('Unable to import product Excel file. Please use the template and try again.'));
         exit;
     }
 }
@@ -257,8 +255,8 @@ if ($stmt) {
                             <div class="col-md-6"><h4 class="card-title mb-0">All Products</h4><p class="card-title-desc mb-0">Manage your product inventory</p></div>
                             <div class="col-md-6">
                                 <div class="d-flex flex-wrap align-items-center justify-content-end gap-2 mt-3 mt-md-0">
-                                    <a href="product-import-template.csv" class="btn btn-outline-info"><i class="mdi mdi-file-delimited me-1"></i> Download CSV Template</a>
-                                    <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#bulkImportModal"><i class="mdi mdi-upload me-1"></i> Bulk Import CSV</button>
+                                    <a href="product-import-template.xlsx" class="btn btn-outline-info"><i class="mdi mdi-file-excel me-1"></i> Download Template</a>
+                                    <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#bulkImportModal"><i class="mdi mdi-upload me-1"></i> Bulk Import</button>
                                     <button type="button" class="btn btn-light border" id="clearFiltersBtn"><i class="mdi mdi-refresh me-1"></i> Reset</button>
                                     <a href="add-product.php" class="btn btn-success"><i class="mdi mdi-plus-circle-outline me-1"></i> Add New</a>
                                 </div>
@@ -273,7 +271,7 @@ if ($stmt) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                <?php if (!empty($products)): $counter = 1; foreach ($products as $row):
+                                <?php if (!empty($products)): $counter = 1; foreach ($products as $row): 
                                     $quantity = (int)($row['quantity'] ?? 0);
                                     $stockStatus = $quantity <= 0 ? 'Out of Stock' : ($quantity < 10 ? 'Low Stock' : 'In Stock');
                                     $stockClass = $quantity <= 0 ? 'bg-danger' : ($quantity < 10 ? 'bg-warning' : 'bg-success');
@@ -321,19 +319,19 @@ if ($stmt) {
         <div class="modal-content">
             <form method="post" enctype="multipart/form-data">
                 <div class="modal-header">
-                    <h5 class="modal-title">Bulk Import Products (CSV)</h5>
+                    <h5 class="modal-title">Bulk Import Products</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <p class="text-muted mb-3">Download the CSV template, fill product rows, and upload the .csv file here.</p>
+                    <p class="text-muted mb-3">Download the Excel template, fill product rows, and upload the .xlsx file here.</p>
                     <div class="mb-3">
-                        <label class="form-label">CSV File</label>
-                        <input type="file" class="form-control" name="import_file" accept=".csv,text/csv" required>
+                        <label class="form-label">Excel File</label>
+                        <input type="file" class="form-control" name="import_file" accept=".xlsx,.xls,.csv" required>
                     </div>
                     <div class="small text-muted">Required columns: <strong>product_name</strong> and <strong>customer_price</strong>. Category and brand can be matched by name.</div>
                 </div>
                 <div class="modal-footer">
-                    <a href="product-import-template.csv" class="btn btn-light border">Download Template</a>
+                    <a href="product-import-template.xlsx" class="btn btn-light border">Download Template</a>
                     <button type="submit" class="btn btn-success" name="bulk_import_products" value="1">Import Now</button>
                 </div>
             </form>

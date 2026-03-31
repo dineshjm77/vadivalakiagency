@@ -96,7 +96,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import_customers
             mysqli_stmt_execute($checkStmt);
             $checkRes = mysqli_stmt_get_result($checkStmt);
             $existing = $checkRes ? mysqli_fetch_assoc($checkRes) : null;
-            if ($checkRes) mysqli_free_result($checkRes);
             mysqli_stmt_close($checkStmt);
 
             if ($existing) {
@@ -178,14 +177,10 @@ $gstSelect = $hasGstColumn ? 'c.gst_number' : "'' AS gst_number";
 $statsSql = "SELECT COUNT(*) AS total_customers, SUM(CASE WHEN c.status = 'active' THEN 1 ELSE 0 END) AS active_customers, SUM(CASE WHEN c.status = 'inactive' THEN 1 ELSE 0 END) AS inactive_customers, SUM(CASE WHEN c.status = 'blocked' THEN 1 ELSE 0 END) AS blocked_customers, COALESCE(SUM(c.current_balance), 0) AS total_balance FROM customers c $whereSql";
 $statsResult = mysqli_query($conn, $statsSql);
 $stats = $statsResult ? mysqli_fetch_assoc($statsResult) : ['total_customers'=>0,'active_customers'=>0,'inactive_customers'=>0,'blocked_customers'=>0,'total_balance'=>0];
-if ($statsResult) mysqli_free_result($statsResult);
 
 $beats = [];
 $beatRes = mysqli_query($conn, "SELECT DISTINCT assigned_area FROM customers WHERE assigned_area IS NOT NULL AND assigned_area <> '' ORDER BY assigned_area ASC");
-if ($beatRes) {
-    while ($row = mysqli_fetch_assoc($beatRes)) $beats[] = $row['assigned_area'];
-    mysqli_free_result($beatRes);
-}
+if ($beatRes) while ($row = mysqli_fetch_assoc($beatRes)) $beats[] = $row['assigned_area'];
 
 $listSql = "SELECT c.id,c.customer_code,c.shop_name,c.customer_name,c.customer_contact,c.alternate_contact,c.shop_location,$gstSelect,c.customer_type,c.assigned_area,c.payment_terms,c.credit_limit,c.current_balance,c.total_purchases,c.last_purchase_date,c.status,l.full_name AS lineman_name,z.zone_name FROM customers c LEFT JOIN linemen l ON c.assigned_lineman_id = l.id LEFT JOIN zones z ON c.zone_id = z.id $whereSql ORDER BY CASE WHEN c.assigned_area IS NULL OR c.assigned_area = '' THEN 1 ELSE 0 END,c.assigned_area ASC,c.shop_name ASC,c.customer_name ASC";
 $listResult = mysqli_query($conn, $listSql);
@@ -196,23 +191,6 @@ $currentPage = 'customers-list';
 <!doctype html>
 <html lang="en">
 <?php include('includes/head.php')?>
-<style>
-.customer-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:.5rem}
-.customer-table-wrap table{min-width:980px}
-@media (max-width: 991.98px){
-    .page-title-box .page-title-right{width:100%;justify-content:flex-start!important;display:flex;flex-wrap:wrap;gap:.5rem}
-    .customer-table-wrap{margin:0 -.5rem;padding:0 .5rem}
-}
-@media (max-width: 767.98px){
-    .main-content .container-fluid{padding-left:.6rem;padding-right:.6rem}
-    .card .card-body{padding:.9rem}
-    .customer-table-wrap table{min-width:860px}
-    .customer-list-table th,.customer-list-table td{font-size:12px;white-space:nowrap}
-    .customer-list-table td.address-cell{white-space:normal;min-width:220px}
-    .page-title-box .btn{width:100%}
-    .page-title-box .page-title-right{flex-direction:column;align-items:stretch}
-}
-</style>
 <body data-sidebar="dark"<?php echo $printMode ? ' class="print-page"' : ''; ?>>
 <?php if (!$printMode) { include('includes/pre-loader.php'); } ?>
 <div id="layout-wrapper">
@@ -285,7 +263,7 @@ $currentPage = 'customers-list';
                             <?php if ($hasGstColumn === false): ?><div class="alert alert-warning py-2 px-3 mb-0 no-print">GST column is not in current customers table. GST will show blank until added.</div><?php endif; ?>
                         </div>
 
-                        <div class="customer-table-wrap">
+                        <div class="table-responsive">
                             <table class="table table-bordered align-middle table-nowrap customer-list-table mb-0">
                                 <thead class="table-light">
                                     <tr>

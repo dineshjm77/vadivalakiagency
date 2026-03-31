@@ -1,0 +1,2 @@
+customer_code,shop_name,customer_name,customer_contact,alternate_contact,shop_location,gst_number,customer_type,assigned_area,payment_terms,credit_limit,current_balance,status
+CUST001,AARTHY STORES,Aarthy,9940787264,,Trichy,33ABCDE1234F1Z5,retail,Crawford,weekly,5000,0,active

@@ -1012,7 +1012,7 @@ if ($customers_result) {
                                             </div>
 
                                             <div class="mb-3">
-                                                <label class="form-label">Payment Status *</label>
+                                                <label class="form-label">Payment Status *</label><div class="small text-muted mb-1">You can enter full, partial, or zero payment.</div>
                                                 <select class="form-select" name="payment_status" id="payment_status" required>
                                                     <option value="pending" <?php echo $prefill_payment_status === 'pending' ? 'selected' : ''; ?>>Pending</option>
                                                     <option value="paid" <?php echo $prefill_payment_status === 'paid' ? 'selected' : ''; ?>>Paid</option>
@@ -1021,7 +1021,7 @@ if ($customers_result) {
                                             </div>
 
                                             <div class="mb-3">
-                                                <label class="form-label">Amount Paid (₹) *</label>
+                                                <label class="form-label">Amount Paid (₹) <small class="text-muted">(Editable)</small></label>
                                                 <input type="number" class="form-control" name="paid_amount" id="paid_amount" min="0" step="0.01" value="<?php echo htmlspecialchars(number_format($prefill_paid_amount, 2, '.', '')); ?>">
                                             </div>
 
@@ -1441,38 +1441,24 @@ function updatePaymentFields() {
     let paid = Math.max(0, Number(paidAmountInput.value || 0));
 
     if (status === 'paid') {
-        paid = total;
-        paidAmountInput.value = total.toFixed(2);
-        paidAmountInput.readOnly = true;
-    } else if (status === 'pending') {
-        if (paid > 0 && total > 0) {
-            if (paid >= total) {
-                status = 'paid';
-                paymentStatusSelect.value = 'paid';
-                paid = total;
-                paidAmountInput.value = total.toFixed(2);
-                paidAmountInput.readOnly = true;
-            } else {
-                status = 'partial';
-                paymentStatusSelect.value = 'partial';
-                paidAmountInput.readOnly = false;
-            }
-        } else {
-            paid = 0;
-            paidAmountInput.value = '0.00';
-            paidAmountInput.readOnly = true;
-        }
-    } else {
-        paidAmountInput.readOnly = false;
-        if (paid >= total && total > 0) {
-            status = 'paid';
-            paymentStatusSelect.value = 'paid';
+        if (paid <= 0 || paid > total) {
             paid = total;
             paidAmountInput.value = total.toFixed(2);
-            paidAmountInput.readOnly = true;
+        }
+    } else if (status === 'pending') {
+        if (paid !== 0) {
+            paid = 0;
+            paidAmountInput.value = '0.00';
+        }
+    } else {
+        if (paid >= total && total > 0) {
+            paid = total - 0.01;
+            if (paid < 0) paid = 0;
+            paidAmountInput.value = paid.toFixed(2);
         }
     }
 
+    paidAmountInput.readOnly = false;
     document.getElementById('invoicePaymentStatusText').textContent = status.charAt(0).toUpperCase() + status.slice(1);
     paid = Math.min(total, Math.max(0, Number(paidAmountInput.value || 0)));
     document.getElementById('pending_amount').value = formatMoney(total - paid);
@@ -1513,7 +1499,7 @@ function validateInvoiceForm() {
         return false;
     }
     if (status === 'partial' && (paid <= 0 || paid >= total)) {
-        alert('Partial payment must be greater than 0 and less than total');
+        alert('Partial payment must be greater than 0 and less than total amount');
         return false;
     }
     return true;
@@ -1544,7 +1530,13 @@ customerSelect.addEventListener('change', updateCustomerDetails);
 paymentStatusSelect.addEventListener('change', updatePaymentFields);
 paidAmountInput.addEventListener('input', function () {
     const total = Number(document.getElementById('total_amount').value || 0);
-    const paid = Math.max(0, Number(paidAmountInput.value || 0));
+    let paid = Math.max(0, Number(paidAmountInput.value || 0));
+
+    if (paid > total && total > 0) {
+        paid = total;
+        paidAmountInput.value = total.toFixed(2);
+    }
+
     if (paid <= 0) {
         paymentStatusSelect.value = 'pending';
     } else if (paid >= total && total > 0) {
@@ -1552,7 +1544,9 @@ paidAmountInput.addEventListener('input', function () {
     } else {
         paymentStatusSelect.value = 'partial';
     }
-    updatePaymentFields();
+
+    document.getElementById('pending_amount').value = formatMoney(total - paid);
+    document.getElementById('invoicePaymentStatusText').textContent = paymentStatusSelect.value.charAt(0).toUpperCase() + paymentStatusSelect.value.slice(1);
 });
 document.getElementById('resetInvoiceBtn').addEventListener('click', resetInvoiceForm);
 

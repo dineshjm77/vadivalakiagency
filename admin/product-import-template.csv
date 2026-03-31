@@ -1,0 +1,2 @@
+product_code,product_name,hsn_code,category_name,brand_name,stock_price,customer_price,quantity,description,status
+PROD001,Milk 160 ml,0401,Dairy,Local Brand,7.60,8.50,100,Daily product,active

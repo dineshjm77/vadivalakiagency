@@ -499,4 +499,4 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 </style>
 </body>
-</html> 
+</html>
