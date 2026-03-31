@@ -82,6 +82,37 @@ $preselected_customer_id = isset($_GET['customer_id']) ? (int)$_GET['customer_id
 $preselected_product_id = isset($_GET['product_id']) ? (int)$_GET['product_id'] : 0;
 $preselected_product_quantity = isset($_GET['quantity']) ? max(1, (int)$_GET['quantity']) : 1;
 
+$edit_order_id = isset($_GET['edit_order_id']) ? (int)$_GET['edit_order_id'] : 0;
+$is_edit_mode = false;
+$edit_order = null;
+$edit_order_items = [];
+$edit_order_items_json = '[]';
+$prefill_payment_status = 'pending';
+$prefill_paid_amount = 0.00;
+$prefill_notes = '';
+
+if ($edit_order_id > 0) {
+    $editSql = "SELECT o.*, c.shop_name, c.customer_name
+                FROM orders o
+                LEFT JOIN customers c ON c.id = o.customer_id
+                WHERE o.id = ? LIMIT 1";
+    $editStmt = mysqli_prepare($conn, $editSql);
+    mysqli_stmt_bind_param($editStmt, "i", $edit_order_id);
+    mysqli_stmt_execute($editStmt);
+    $editRes = mysqli_stmt_get_result($editStmt);
+    if ($editRes && mysqli_num_rows($editRes) > 0) {
+        $edit_order = mysqli_fetch_assoc($editRes);
+        $is_edit_mode = true;
+        $preselected_customer_id = (int)$edit_order['customer_id'];
+        $prefill_payment_status = (string)($edit_order['payment_status'] ?? 'pending');
+        $prefill_paid_amount = (float)($edit_order['paid_amount'] ?? 0);
+        $prefill_notes = (string)($edit_order['notes'] ?? '');
+    } else {
+        $edit_order_id = 0;
+    }
+}
+
+
 $customerSelect = "c.id, c.customer_code, c.shop_name, c.customer_name, c.customer_contact,
                    c.shop_location, c.current_balance, c.payment_terms, c.zone_id,
                    l.full_name AS lineman_name";
@@ -133,6 +164,77 @@ if ($products_result) {
     }
 }
 
+
+if ($is_edit_mode && $edit_order) {
+    if ($hasExtendedOrderItems) {
+        $editItemSql = "SELECT
+                            oi.product_id,
+                            p.product_name,
+                            p.product_code,
+                            COALESCE(oi.hsn_code, '') AS hsn_code,
+                            COALESCE(oi.case_pack, 1) AS case_pack,
+                            COALESCE(oi.cases_qty, 0) AS cases_qty,
+                            COALESCE(oi.pieces_qty, oi.quantity) AS pieces_qty,
+                            COALESCE(oi.free_qty, 0) AS free_qty,
+                            COALESCE(oi.mrp, p.customer_price) AS mrp,
+                            COALESCE(oi.base_rate, oi.price) AS base_rate,
+                            COALESCE(oi.discount_amount, 0) AS discount_amount,
+                            COALESCE(oi.gst_rate, 0) AS gst_rate,
+                            COALESCE(p.quantity, 0) AS current_stock
+                        FROM order_items oi
+                        LEFT JOIN products p ON p.id = oi.product_id
+                        WHERE oi.order_id = ?
+                        ORDER BY oi.id ASC";
+    } else {
+        $editItemSql = "SELECT
+                            oi.product_id,
+                            p.product_name,
+                            p.product_code,
+                            COALESCE(p.hsn_code, '') AS hsn_code,
+                            COALESCE(p.case_pack, 1) AS case_pack,
+                            0 AS cases_qty,
+                            COALESCE(oi.quantity, 0) AS pieces_qty,
+                            0 AS free_qty,
+                            COALESCE(p.mrp, p.customer_price) AS mrp,
+                            COALESCE(oi.price, p.customer_price) AS base_rate,
+                            0 AS discount_amount,
+                            COALESCE(p.gst_rate, 0) AS gst_rate,
+                            COALESCE(p.quantity, 0) AS current_stock
+                        FROM order_items oi
+                        LEFT JOIN products p ON p.id = oi.product_id
+                        WHERE oi.order_id = ?
+                        ORDER BY oi.id ASC";
+    }
+    $editItemStmt = mysqli_prepare($conn, $editItemSql);
+    mysqli_stmt_bind_param($editItemStmt, "i", $edit_order_id);
+    mysqli_stmt_execute($editItemStmt);
+    $editItemRes = mysqli_stmt_get_result($editItemStmt);
+    while ($editItemRes && $row = mysqli_fetch_assoc($editItemRes)) {
+        $casePack = max(1, (int)($row['case_pack'] ?? 1));
+        $casesQty = max(0, (int)($row['cases_qty'] ?? 0));
+        $piecesQty = max(0, (int)($row['pieces_qty'] ?? 0));
+        $freeQty = max(0, (int)($row['free_qty'] ?? 0));
+        $reservedStock = ($casesQty * $casePack) + $piecesQty + $freeQty;
+        $row['available_stock'] = (int)($row['current_stock'] ?? 0) + $reservedStock;
+        $edit_order_items[] = [
+            'product_id' => (int)$row['product_id'],
+            'product_name' => (string)($row['product_name'] ?? ''),
+            'product_code' => (string)($row['product_code'] ?? ''),
+            'hsn_code' => (string)($row['hsn_code'] ?? ''),
+            'case_pack' => $casePack,
+            'cases_qty' => $casesQty,
+            'pieces_qty' => $piecesQty,
+            'free_qty' => $freeQty,
+            'mrp' => (float)($row['mrp'] ?? 0),
+            'base_rate' => (float)($row['base_rate'] ?? 0),
+            'discount_amount' => (float)($row['discount_amount'] ?? 0),
+            'gst_rate' => (float)($row['gst_rate'] ?? 0),
+            'available_stock' => (int)$row['available_stock'],
+        ];
+    }
+    $edit_order_items_json = json_encode($edit_order_items, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
 $preselected_product = null;
 if ($preselected_product_id > 0) {
     if (isset($products_lookup[$preselected_product_id])) {
@@ -150,6 +252,11 @@ if ($preselected_product_id > 0) {
 $order_number = qo_generate_invoice_number($conn);
 $order_date = date('Y-m-d');
 
+if ($is_edit_mode && $edit_order) {
+    $order_number = (string)$edit_order['order_number'];
+    $order_date = (string)$edit_order['order_date'];
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_order'])) {
     $customer_id = isset($_POST['customer_id']) ? (int)$_POST['customer_id'] : 0;
     $payment_method = trim((string)($_POST['payment_method'] ?? 'cash'));
@@ -158,6 +265,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_order'])) {
     $postedOrderNumber = trim((string)($_POST['order_number'] ?? ''));
     $postedOrderDate = trim((string)($_POST['order_date'] ?? date('Y-m-d')));
     $paid_amount = (float)($_POST['paid_amount'] ?? 0);
+    $edit_order_id_post = isset($_POST['edit_order_id']) ? (int)$_POST['edit_order_id'] : 0;
 
     if ($customer_id <= 0) {
         $error_message = 'Please select a customer';
@@ -266,10 +374,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_order'])) {
             }
 
             if (!$error_message) {
-                if ($payment_status === 'paid') {
+                if ($paid_amount >= $grand_total && $grand_total > 0) {
                     $paid_amount = $grand_total;
-                } elseif ($payment_status === 'pending') {
+                    $payment_status = 'paid';
+                } elseif ($paid_amount > 0 && $paid_amount < $grand_total) {
+                    $payment_status = 'partial';
+                } else {
                     $paid_amount = 0;
+                    $payment_status = 'pending';
                 }
 
                 if ($paid_amount < 0 || $paid_amount > $grand_total) {
@@ -286,66 +398,183 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_order'])) {
                     ? (int)$customerRow['zone_id']
                     : null;
 
+                
                 mysqli_begin_transaction($conn);
                 try {
                     $paymentDate = $paid_amount > 0 ? date('Y-m-d H:i:s') : null;
                     $deliveryDate = $postedOrderDate;
+                    $order_id = 0;
 
-                    if ($zone_id === null) {
-                        $order_sql = "INSERT INTO orders (
-                                        customer_id, order_number, order_date, total_items, total_amount,
-                                        status, delivery_date, payment_date, notes, created_by,
-                                        payment_method, payment_status, paid_amount, pending_amount, zone_id
-                                      ) VALUES (?, ?, ?, ?, ?, 'delivered', ?, ?, ?, ?, ?, ?, ?, ?, NULL)";
-                        $stmt = mysqli_prepare($conn, $order_sql);
-                        mysqli_stmt_bind_param(
-                            $stmt,
-                            'issidsssissdd',
-                            $customer_id,
-                            $postedOrderNumber,
-                            $postedOrderDate,
-                            $total_bill_qty,
-                            $grand_total,
-                            $deliveryDate,
-                            $paymentDate,
-                            $invoice_notes,
-                            $admin_id,
-                            $payment_method,
-                            $payment_status,
-                            $paid_amount,
-                            $pending_amount
-                        );
+                    if ($edit_order_id_post > 0) {
+                        $oldOrderSql = "SELECT id, customer_id, total_amount, paid_amount, pending_amount FROM orders WHERE id = ? LIMIT 1";
+                        $oldOrderStmt = mysqli_prepare($conn, $oldOrderSql);
+                        mysqli_stmt_bind_param($oldOrderStmt, "i", $edit_order_id_post);
+                        mysqli_stmt_execute($oldOrderStmt);
+                        $oldOrderRes = mysqli_stmt_get_result($oldOrderStmt);
+                        $oldOrder = $oldOrderRes ? mysqli_fetch_assoc($oldOrderRes) : null;
+
+                        if (!$oldOrder) {
+                            throw new Exception('Order not found for editing');
+                        }
+
+                        $order_id = (int)$oldOrder['id'];
+
+                        if ($hasExtendedOrderItems) {
+                            $oldItemsSql = "SELECT product_id, quantity, COALESCE(free_qty, 0) AS free_qty FROM order_items WHERE order_id = ?";
+                        } else {
+                            $oldItemsSql = "SELECT product_id, quantity, 0 AS free_qty FROM order_items WHERE order_id = ?";
+                        }
+                        $oldItemsStmt = mysqli_prepare($conn, $oldItemsSql);
+                        mysqli_stmt_bind_param($oldItemsStmt, "i", $order_id);
+                        mysqli_stmt_execute($oldItemsStmt);
+                        $oldItemsRes = mysqli_stmt_get_result($oldItemsStmt);
+                        while ($oldItemsRes && $oldItem = mysqli_fetch_assoc($oldItemsRes)) {
+                            $restoreQty = (int)$oldItem['quantity'] + (int)$oldItem['free_qty'];
+                            $restoreStmt = mysqli_prepare($conn, "UPDATE products SET quantity = quantity + ? WHERE id = ?");
+                            mysqli_stmt_bind_param($restoreStmt, 'ii', $restoreQty, $oldItem['product_id']);
+                            mysqli_stmt_execute($restoreStmt);
+                            mysqli_stmt_close($restoreStmt);
+                        }
+                        mysqli_stmt_close($oldItemsStmt);
+
+                        $delItemStmt = mysqli_prepare($conn, "DELETE FROM order_items WHERE order_id = ?");
+                        mysqli_stmt_bind_param($delItemStmt, "i", $order_id);
+                        mysqli_stmt_execute($delItemStmt);
+                        mysqli_stmt_close($delItemStmt);
+
+                        if (qo_column_exists($conn, 'payment_history', 'order_id')) {
+                            $delHistoryStmt = mysqli_prepare($conn, "DELETE FROM payment_history WHERE order_id = ?");
+                            mysqli_stmt_bind_param($delHistoryStmt, "i", $order_id);
+                            mysqli_stmt_execute($delHistoryStmt);
+                            mysqli_stmt_close($delHistoryStmt);
+                        }
+
+                        $delTxnStmt = mysqli_prepare($conn, "DELETE FROM transactions WHERE order_id = ? AND type = 'payment'");
+                        mysqli_stmt_bind_param($delTxnStmt, "i", $order_id);
+                        mysqli_stmt_execute($delTxnStmt);
+                        mysqli_stmt_close($delTxnStmt);
+
+                        $reverseCustomerId = (int)$oldOrder['customer_id'];
+                        $reversePending = (float)$oldOrder['pending_amount'];
+                        $reverseTotal = (float)$oldOrder['total_amount'];
+                        $reverseStmt = mysqli_prepare($conn, "UPDATE customers SET current_balance = GREATEST(0, current_balance - ?), total_purchases = GREATEST(0, total_purchases - ?) WHERE id = ?");
+                        mysqli_stmt_bind_param($reverseStmt, 'ddi', $reversePending, $reverseTotal, $reverseCustomerId);
+                        if (!mysqli_stmt_execute($reverseStmt)) {
+                            throw new Exception('Failed to reverse previous customer balance: ' . mysqli_error($conn));
+                        }
+                        mysqli_stmt_close($reverseStmt);
+
+                        if ($zone_id === null) {
+                            $order_sql = "UPDATE orders SET
+                                            customer_id = ?, order_number = ?, order_date = ?, total_items = ?, total_amount = ?,
+                                            status = 'delivered', delivery_date = ?, payment_date = ?, notes = ?, created_by = ?,
+                                            payment_method = ?, payment_status = ?, paid_amount = ?, pending_amount = ?, zone_id = NULL
+                                          WHERE id = ?";
+                            $stmt = mysqli_prepare($conn, $order_sql);
+                            mysqli_stmt_bind_param(
+                                $stmt,
+                                'issidsssissddi',
+                                $customer_id,
+                                $postedOrderNumber,
+                                $postedOrderDate,
+                                $total_bill_qty,
+                                $grand_total,
+                                $deliveryDate,
+                                $paymentDate,
+                                $invoice_notes,
+                                $admin_id,
+                                $payment_method,
+                                $payment_status,
+                                $paid_amount,
+                                $pending_amount,
+                                $order_id
+                            );
+                        } else {
+                            $order_sql = "UPDATE orders SET
+                                            customer_id = ?, order_number = ?, order_date = ?, total_items = ?, total_amount = ?,
+                                            status = 'delivered', delivery_date = ?, payment_date = ?, notes = ?, created_by = ?,
+                                            payment_method = ?, payment_status = ?, paid_amount = ?, pending_amount = ?, zone_id = ?
+                                          WHERE id = ?";
+                            $stmt = mysqli_prepare($conn, $order_sql);
+                            mysqli_stmt_bind_param(
+                                $stmt,
+                                'issidsssissddii',
+                                $customer_id,
+                                $postedOrderNumber,
+                                $postedOrderDate,
+                                $total_bill_qty,
+                                $grand_total,
+                                $deliveryDate,
+                                $paymentDate,
+                                $invoice_notes,
+                                $admin_id,
+                                $payment_method,
+                                $payment_status,
+                                $paid_amount,
+                                $pending_amount,
+                                $zone_id,
+                                $order_id
+                            );
+                        }
                     } else {
-                        $order_sql = "INSERT INTO orders (
-                                        customer_id, order_number, order_date, total_items, total_amount,
-                                        status, delivery_date, payment_date, notes, created_by,
-                                        payment_method, payment_status, paid_amount, pending_amount, zone_id
-                                      ) VALUES (?, ?, ?, ?, ?, 'delivered', ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-                        $stmt = mysqli_prepare($conn, $order_sql);
-                        mysqli_stmt_bind_param(
-                            $stmt,
-                            'issidsssissddi',
-                            $customer_id,
-                            $postedOrderNumber,
-                            $postedOrderDate,
-                            $total_bill_qty,
-                            $grand_total,
-                            $deliveryDate,
-                            $paymentDate,
-                            $invoice_notes,
-                            $admin_id,
-                            $payment_method,
-                            $payment_status,
-                            $paid_amount,
-                            $pending_amount,
-                            $zone_id
-                        );
+                        if ($zone_id === null) {
+                            $order_sql = "INSERT INTO orders (
+                                            customer_id, order_number, order_date, total_items, total_amount,
+                                            status, delivery_date, payment_date, notes, created_by,
+                                            payment_method, payment_status, paid_amount, pending_amount, zone_id
+                                          ) VALUES (?, ?, ?, ?, ?, 'delivered', ?, ?, ?, ?, ?, ?, ?, ?, NULL)";
+                            $stmt = mysqli_prepare($conn, $order_sql);
+                            mysqli_stmt_bind_param(
+                                $stmt,
+                                'issidsssissdd',
+                                $customer_id,
+                                $postedOrderNumber,
+                                $postedOrderDate,
+                                $total_bill_qty,
+                                $grand_total,
+                                $deliveryDate,
+                                $paymentDate,
+                                $invoice_notes,
+                                $admin_id,
+                                $payment_method,
+                                $payment_status,
+                                $paid_amount,
+                                $pending_amount
+                            );
+                        } else {
+                            $order_sql = "INSERT INTO orders (
+                                            customer_id, order_number, order_date, total_items, total_amount,
+                                            status, delivery_date, payment_date, notes, created_by,
+                                            payment_method, payment_status, paid_amount, pending_amount, zone_id
+                                          ) VALUES (?, ?, ?, ?, ?, 'delivered', ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                            $stmt = mysqli_prepare($conn, $order_sql);
+                            mysqli_stmt_bind_param(
+                                $stmt,
+                                'issidsssissddi',
+                                $customer_id,
+                                $postedOrderNumber,
+                                $postedOrderDate,
+                                $total_bill_qty,
+                                $grand_total,
+                                $deliveryDate,
+                                $paymentDate,
+                                $invoice_notes,
+                                $admin_id,
+                                $payment_method,
+                                $payment_status,
+                                $paid_amount,
+                                $pending_amount,
+                                $zone_id
+                            );
+                        }
                     }
 
                     if (!mysqli_stmt_execute($stmt)) {
-                        throw new Exception('Failed to create order: ' . mysqli_error($conn));
+                        throw new Exception(($edit_order_id_post > 0 ? 'Failed to update order: ' : 'Failed to create order: ') . mysqli_error($conn));
                     }
-                    $order_id = (int)mysqli_insert_id($conn);
+                    if ($edit_order_id_post <= 0) {
+                        $order_id = (int)mysqli_insert_id($conn);
+                    }
                     mysqli_stmt_close($stmt);
 
                     foreach ($lineItems as $item) {
@@ -433,26 +662,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_order'])) {
                         $transaction_id = (int)mysqli_insert_id($conn);
                         mysqli_stmt_close($payment_stmt);
 
-                        $history_sql = "INSERT INTO payment_history (
-                                            order_id, transaction_id, amount_paid, payment_method,
-                                            reference_no, notes, created_by, created_at
-                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
-                        $history_stmt = mysqli_prepare($conn, $history_sql);
-                        mysqli_stmt_bind_param(
-                            $history_stmt,
-                            'iidsssi',
-                            $order_id,
-                            $transaction_id,
-                            $paid_amount,
-                            $payment_method,
-                            $postedOrderNumber,
-                            $payment_notes,
-                            $admin_id
-                        );
-                        if (!mysqli_stmt_execute($history_stmt)) {
-                            throw new Exception('Failed to record payment history: ' . mysqli_error($conn));
+                        if (qo_column_exists($conn, 'payment_history', 'order_id')) {
+                            $history_sql = "INSERT INTO payment_history (
+                                                order_id, transaction_id, amount_paid, payment_method,
+                                                reference_no, notes, created_by, created_at
+                                            ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
+                            $history_stmt = mysqli_prepare($conn, $history_sql);
+                            mysqli_stmt_bind_param(
+                                $history_stmt,
+                                'iidsssi',
+                                $order_id,
+                                $transaction_id,
+                                $paid_amount,
+                                $payment_method,
+                                $postedOrderNumber,
+                                $payment_notes,
+                                $admin_id
+                            );
+                            if (!mysqli_stmt_execute($history_stmt)) {
+                                throw new Exception('Failed to record payment history: ' . mysqli_error($conn));
+                            }
+                            mysqli_stmt_close($history_stmt);
                         }
-                        mysqli_stmt_close($history_stmt);
                     }
 
                     $balance_sql = "UPDATE customers
@@ -468,7 +699,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_order'])) {
                     mysqli_stmt_close($balance_stmt);
 
                     mysqli_commit($conn);
-                    header('Location: view-invoice.php?id=' . $order_id);
+                    header('Location: quick-order.php?success=1&order_id=' . $order_id . ($edit_order_id_post > 0 ? '&updated=1' : ''));
                     exit;
                 } catch (Exception $e) {
                     mysqli_rollback($conn);
@@ -509,9 +740,9 @@ if ($customers_result) {
                 <?php if (isset($_GET['success'])): ?>
                     <div class="alert alert-success alert-dismissible fade show" role="alert">
                         <i class="mdi mdi-check-circle-outline me-2"></i>
-                        Invoice created successfully.
+                        <?php echo isset($_GET['updated']) ? 'Invoice updated successfully.' : 'Invoice created successfully.'; ?>
                         <?php if (isset($_GET['order_id'])): ?>
-                            <a href="view-invoice.php?id=<?php echo (int)$_GET['order_id']; ?>" class="alert-link">Preview Invoice</a>
+                            <a href="view-invoice.php?id=<?php echo (int)$_GET['order_id']; ?>" class="alert-link">View Invoice</a>
                         <?php endif; ?>
                         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                     </div>
@@ -534,9 +765,20 @@ if ($customers_result) {
                     </div>
                 <?php endif; ?>
 
+
+                <?php if ($is_edit_mode && $edit_order): ?>
+                    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+                        <i class="mdi mdi-pencil-outline me-2"></i>
+                        Editing converted order: <strong><?php echo htmlspecialchars($edit_order['order_number']); ?></strong>.
+                        Customer and product lines are editable before final invoice processing.
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                <?php endif; ?>
+
                 <form method="POST" id="orderForm" onsubmit="return validateInvoiceForm();">
                     <input type="hidden" name="order_number" id="order_number" value="<?php echo htmlspecialchars($order_number); ?>">
                     <input type="hidden" name="order_date" id="order_date" value="<?php echo htmlspecialchars($order_date); ?>">
+                    <input type="hidden" name="edit_order_id" id="edit_order_id" value="<?php echo $is_edit_mode && $edit_order ? (int)$edit_order['id'] : 0; ?>">
 
                     <div class="card invoice-entry-card mb-4">
                         <div class="card-body p-3 p-md-4">
@@ -565,7 +807,7 @@ if ($customers_result) {
                                         <?php endif; ?>
                                     </div>
                                     <div class="invoice-title-block text-center">
-                                        <div class="invoice-title">TAX INVOICE</div>
+                                        <div class="invoice-title"><?php echo $is_edit_mode ? 'EDIT INVOICE' : 'TAX INVOICE'; ?></div>
                                     </div>
                                     <div class="invoice-customer-block">
                                         <div class="fw-bold mb-1">To: <span id="invoiceCustomerName"><?php echo htmlspecialchars($preselected_customer['shop_name'] ?? 'Select customer'); ?></span></div>
@@ -772,15 +1014,15 @@ if ($customers_result) {
                                             <div class="mb-3">
                                                 <label class="form-label">Payment Status *</label>
                                                 <select class="form-select" name="payment_status" id="payment_status" required>
-                                                    <option value="pending">Pending</option>
-                                                    <option value="paid">Paid</option>
-                                                    <option value="partial">Partial</option>
+                                                    <option value="pending" <?php echo $prefill_payment_status === 'pending' ? 'selected' : ''; ?>>Pending</option>
+                                                    <option value="paid" <?php echo $prefill_payment_status === 'paid' ? 'selected' : ''; ?>>Paid</option>
+                                                    <option value="partial" <?php echo $prefill_payment_status === 'partial' ? 'selected' : ''; ?>>Partial</option>
                                                 </select>
                                             </div>
 
                                             <div class="mb-3">
                                                 <label class="form-label">Amount Paid (₹) *</label>
-                                                <input type="number" class="form-control" name="paid_amount" id="paid_amount" min="0" step="0.01" value="0">
+                                                <input type="number" class="form-control" name="paid_amount" id="paid_amount" min="0" step="0.01" value="<?php echo htmlspecialchars(number_format($prefill_paid_amount, 2, '.', '')); ?>">
                                             </div>
 
                                             <div class="mb-3">
@@ -790,7 +1032,7 @@ if ($customers_result) {
 
                                             <div class="mb-0">
                                                 <label class="form-label">Notes</label>
-                                                <textarea class="form-control" name="notes" id="notes" rows="4" placeholder="Special instructions, delivery details, remarks..."></textarea>
+                                                <textarea class="form-control" name="notes" id="notes" rows="4" placeholder="Special instructions, delivery details, remarks..."><?php echo htmlspecialchars($prefill_notes); ?></textarea>
                                             </div>
                                         </div>
                                     </div>
@@ -967,6 +1209,8 @@ if ($customers_result) {
 const productsData = <?php echo json_encode($products_array, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
 const preselectedProductId = <?php echo (int)$preselected_product_id; ?>;
 const preselectedProductQuantity = <?php echo (int)$preselected_product_quantity; ?>;
+const isEditMode = <?php echo $is_edit_mode ? 'true' : 'false'; ?>;
+const existingEditLines = <?php echo $edit_order_items_json ?: '[]'; ?>;
 const selectedLines = [];
 const paymentStatusSelect = document.getElementById('payment_status');
 const paidAmountInput = document.getElementById('paid_amount');
@@ -1192,24 +1436,45 @@ function updateTotals() {
 }
 
 function updatePaymentFields() {
-    const status = paymentStatusSelect.value;
+    let status = paymentStatusSelect.value;
     const total = Number(document.getElementById('total_amount').value || 0);
-    document.getElementById('invoicePaymentStatusText').textContent = status.charAt(0).toUpperCase() + status.slice(1);
+    let paid = Math.max(0, Number(paidAmountInput.value || 0));
 
     if (status === 'paid') {
+        paid = total;
         paidAmountInput.value = total.toFixed(2);
         paidAmountInput.readOnly = true;
     } else if (status === 'pending') {
-        paidAmountInput.value = '0.00';
-        paidAmountInput.readOnly = true;
-    } else {
-        if (Number(paidAmountInput.value || 0) >= total) {
+        if (paid > 0 && total > 0) {
+            if (paid >= total) {
+                status = 'paid';
+                paymentStatusSelect.value = 'paid';
+                paid = total;
+                paidAmountInput.value = total.toFixed(2);
+                paidAmountInput.readOnly = true;
+            } else {
+                status = 'partial';
+                paymentStatusSelect.value = 'partial';
+                paidAmountInput.readOnly = false;
+            }
+        } else {
+            paid = 0;
             paidAmountInput.value = '0.00';
+            paidAmountInput.readOnly = true;
         }
+    } else {
         paidAmountInput.readOnly = false;
+        if (paid >= total && total > 0) {
+            status = 'paid';
+            paymentStatusSelect.value = 'paid';
+            paid = total;
+            paidAmountInput.value = total.toFixed(2);
+            paidAmountInput.readOnly = true;
+        }
     }
 
-    const paid = Math.min(total, Math.max(0, Number(paidAmountInput.value || 0)));
+    document.getElementById('invoicePaymentStatusText').textContent = status.charAt(0).toUpperCase() + status.slice(1);
+    paid = Math.min(total, Math.max(0, Number(paidAmountInput.value || 0)));
     document.getElementById('pending_amount').value = formatMoney(total - paid);
 }
 
@@ -1277,7 +1542,18 @@ document.getElementById('customerSearch').addEventListener('input', function () 
 
 customerSelect.addEventListener('change', updateCustomerDetails);
 paymentStatusSelect.addEventListener('change', updatePaymentFields);
-paidAmountInput.addEventListener('input', updatePaymentFields);
+paidAmountInput.addEventListener('input', function () {
+    const total = Number(document.getElementById('total_amount').value || 0);
+    const paid = Math.max(0, Number(paidAmountInput.value || 0));
+    if (paid <= 0) {
+        paymentStatusSelect.value = 'pending';
+    } else if (paid >= total && total > 0) {
+        paymentStatusSelect.value = 'paid';
+    } else {
+        paymentStatusSelect.value = 'partial';
+    }
+    updatePaymentFields();
+});
 document.getElementById('resetInvoiceBtn').addEventListener('click', resetInvoiceForm);
 
 document.getElementById('productSearch').addEventListener('input', function () {
@@ -1296,9 +1572,28 @@ document.querySelectorAll('.add-product-btn').forEach(btn => {
 
 document.getElementById('invoiceDateText').textContent = new Date(document.getElementById('order_date').value).toLocaleDateString('en-GB').replaceAll('/', '-');
 updateCustomerDetails();
+
+if (isEditMode && Array.isArray(existingEditLines) && existingEditLines.length > 0) {
+    existingEditLines.forEach(line => selectedLines.push({
+        product_id: Number(line.product_id),
+        product_name: line.product_name,
+        product_code: line.product_code,
+        hsn_code: line.hsn_code || '',
+        case_pack: Math.max(1, Number(line.case_pack || 1)),
+        cases_qty: Math.max(0, Number(line.cases_qty || 0)),
+        pieces_qty: Math.max(0, Number(line.pieces_qty || 0)),
+        free_qty: Math.max(0, Number(line.free_qty || 0)),
+        mrp: Number(line.mrp || 0),
+        base_rate: Number(line.base_rate || 0),
+        discount_amount: Number(line.discount_amount || 0),
+        gst_rate: Number(line.gst_rate || 0),
+        available_stock: Number(line.available_stock || 0)
+    }));
+}
+
 renderInvoiceLines();
 
-if (preselectedProductId > 0) {
+if (!isEditMode && preselectedProductId > 0) {
     addProductLine(preselectedProductId, preselectedProductQuantity > 0 ? preselectedProductQuantity : 1);
 }
 </script>

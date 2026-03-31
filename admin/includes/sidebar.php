@@ -121,6 +121,13 @@
     </a>
 </li>
 
+        <li>
+            <a href="assigned-orders.php" class="waves-effect">
+                <i class="dripicons-cart"></i>
+                <span>Assingned Orders</span>
+                <span class="badge rounded-pill bg-success float-end" id="pending-orders">0</span>
+            </a>
+        </li>
 
         <li>
             <a href="orders-list.php" class="waves-effect">

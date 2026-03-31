@@ -170,7 +170,7 @@ $currentPage = 'customers-list';
                 <div class="row no-print">
                     <div class="col-12">
                         <div class="page-title-box d-sm-flex align-items-center justify-content-between">
-                            <h4 class="mb-sm-0 font-size-18">Customers / Beat List</h4>
+                            <h4 class="mb-sm-0 font-size-18">Customers List</h4>
                             <div class="page-title-right d-flex gap-2">
                                 <a href="add-customer.php" class="btn btn-success">
                                     <i class="mdi mdi-plus-circle-outline me-1"></i> Add Customer
@@ -329,21 +329,19 @@ $currentPage = 'customers-list';
                             <?php endif; ?>
                         </div>
 
-                        <div class="table-responsive">
-                            <table class="table table-bordered align-middle table-nowrap customer-list-table mb-0">
+                        <!-- Responsive table wrapper with horizontal scrolling for small screens -->
+                        <div class="table-responsive" style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
+                            <table class="table table-bordered align-middle table-nowrap mb-0" style="min-width: 700px; width: 100%;">
                                 <thead class="table-light">
                                     <tr>
-                                        <th style="width:70px;">No.</th>
-                                        <?php if ($beat === ''): ?>
-                                            <th style="width:140px;">Beat</th>
-                                        <?php endif; ?>
-                                        <th style="min-width:220px;">Name</th>
-                                        <th style="min-width:120px;">Contact Person</th>
-                                        <th style="min-width:350px;">Address</th>
-                                        <th style="min-width:140px;">GST No</th>
-                                        <th style="min-width:130px;">Phone</th>
-                                        <th class="no-print" style="min-width:110px;">Status</th>
-                                        <th class="no-print" style="min-width:130px;">Action</th>
+                                        <th style="width:60px;">No.</th>
+                                        <th style="width:220px;">Shop Name / Code</th>
+                                        <th style="width:150px;">Contact Person</th>
+                                        <th style="width:280px;">Address</th>
+                                        <th style="width:140px;">GST No</th>
+                                        <th style="width:150px;">Phone</th>
+                                        <th class="no-print" style="width:90px;">Status</th>
+                                        <th class="no-print" style="width:100px;">Action</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -351,15 +349,12 @@ $currentPage = 'customers-list';
                                         <?php $i = 1; while ($row = mysqli_fetch_assoc($listResult)): ?>
                                             <tr>
                                                 <td><?php echo $i++; ?></td>
-                                                <?php if ($beat === ''): ?>
-                                                    <td><?php echo esc_customer_page($row['assigned_area'] ?: '-'); ?></td>
-                                                <?php endif; ?>
                                                 <td>
                                                     <div class="fw-bold"><?php echo esc_customer_page($row['shop_name']); ?></div>
                                                     <small class="text-muted"><?php echo esc_customer_page($row['customer_code']); ?></small>
                                                 </td>
                                                 <td><?php echo esc_customer_page($row['customer_name']); ?></td>
-                                                <td class="address-cell"><?php echo nl2br(esc_customer_page($row['shop_location'])); ?></td>
+                                                <td class="address-cell" style="white-space: normal; word-break: break-word;"><?php echo nl2br(esc_customer_page($row['shop_location'])); ?></td>
                                                 <td><?php echo esc_customer_page($row['gst_number'] ?: ''); ?></td>
                                                 <td>
                                                     <?php echo esc_customer_page($row['customer_contact']); ?>
@@ -390,7 +385,7 @@ $currentPage = 'customers-list';
                                         <?php endwhile; ?>
                                     <?php else: ?>
                                         <tr>
-                                            <td colspan="<?php echo $beat === '' ? '9' : '8'; ?>" class="text-center py-4">
+                                            <td colspan="8" class="text-center py-4">
                                                 <div class="text-muted">
                                                     <i class="mdi mdi-account-off display-6 d-block mb-2"></i>
                                                     No customers found.
@@ -414,15 +409,56 @@ $currentPage = 'customers-list';
 <?php include('includes/scripts.php')?>
 <?php endif; ?>
 
+<!-- JavaScript to handle scroll to top when scrolling horizontally -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Find the table responsive container
+    var tableContainer = document.querySelector('.table-responsive');
+    
+    if (tableContainer) {
+        // When user scrolls horizontally, also scroll the page to top
+        tableContainer.addEventListener('scroll', function(e) {
+            // Scroll the window to top
+            window.scrollTo({
+                top: 0,
+                behavior: 'smooth'
+            });
+        });
+    }
+});
+</script>
+
 <style>
-.customer-list-table th,
-.customer-list-table td {
+/* Improved table styles */
+.table td, .table th {
     vertical-align: top;
 }
-.customer-list-table .address-cell {
+.address-cell {
     white-space: normal;
     line-height: 1.45;
+    word-break: break-word;
 }
+
+/* Responsive table adjustments */
+.table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    position: relative;
+}
+
+/* Make table cells more compact on smaller screens */
+@media (max-width: 768px) {
+    .table td, .table th {
+        padding: 0.5rem;
+        font-size: 0.85rem;
+    }
+    .btn-sm {
+        padding: 0.2rem 0.4rem;
+        font-size: 0.7rem;
+    }
+}
+
+/* Print styles */
 @media print {
     body {
         background: #fff !important;
@@ -447,14 +483,20 @@ $currentPage = 'customers-list';
         box-shadow: none !important;
         border: none !important;
     }
-    .customer-list-table {
+    .table {
         font-size: 12px;
     }
-    .customer-list-table th,
-    .customer-list-table td {
+    .table td, .table th {
         padding: 6px !important;
+    }
+    .table-responsive {
+        overflow: visible !important;
+    }
+    table {
+        width: 100% !important;
+        min-width: auto !important;
     }
 }
 </style>
 </body>
-</html>
+</html> 
