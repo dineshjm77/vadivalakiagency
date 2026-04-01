@@ -17,6 +17,42 @@
             </a>
         </li>
 
+
+        <!-- Quick Order Option Added Here -->
+<li>
+    <a href="quick-order.php" class="waves-effect">
+        <i class="fas fa-rocket"></i>
+        <span>Quick Order</span>
+    </a>
+</li>
+
+        <li>
+            <a href="assigned-orders.php" class="waves-effect">
+                <i class="dripicons-cart"></i>
+                <span>Assingned Orders</span>
+                <span class="badge rounded-pill bg-success float-end" id="pending-orders">0</span>
+            </a>
+        </li>
+
+        <li>
+            <a href="orders-list.php" class="waves-effect">
+                <i class="dripicons-cart"></i>
+                <span>Orders</span>
+                <span class="badge rounded-pill bg-success float-end" id="pending-orders">0</span>
+            </a>
+        </li>
+
+        <li>
+            <a href="javascript: void(0);" class="has-arrow waves-effect">
+                <i class="dripicons-card"></i>
+                <span>Payments</span>
+            </a>
+            <ul class="sub-menu" aria-expanded="false">
+                <li><a href="pending-payments.php">Pending Payments</a></li>
+                <li><a href="payment-history.php">Payment History</a></li>
+            </ul>
+        </li>
+
         <li class="menu-title">Management</li>
 
         <li>
@@ -113,40 +149,7 @@
     </ul>
 </li>
 
-<!-- Quick Order Option Added Here -->
-<li>
-    <a href="quick-order.php" class="waves-effect">
-        <i class="fas fa-rocket"></i>
-        <span>Quick Order</span>
-    </a>
-</li>
 
-        <li>
-            <a href="assigned-orders.php" class="waves-effect">
-                <i class="dripicons-cart"></i>
-                <span>Assingned Orders</span>
-                <span class="badge rounded-pill bg-success float-end" id="pending-orders">0</span>
-            </a>
-        </li>
-
-        <li>
-            <a href="orders-list.php" class="waves-effect">
-                <i class="dripicons-cart"></i>
-                <span>Orders</span>
-                <span class="badge rounded-pill bg-success float-end" id="pending-orders">0</span>
-            </a>
-        </li>
-
-        <li>
-            <a href="javascript: void(0);" class="has-arrow waves-effect">
-                <i class="dripicons-card"></i>
-                <span>Payments</span>
-            </a>
-            <ul class="sub-menu" aria-expanded="false">
-                <li><a href="pending-payments.php">Pending Payments</a></li>
-                <li><a href="payment-history.php">Payment History</a></li>
-            </ul>
-        </li>
 
         <li class="menu-title">Configuration</li>
 

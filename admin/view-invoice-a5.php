@@ -16,9 +16,22 @@ function a5_column_exists(mysqli $conn, string $table, string $column): bool {
 
 function a5_words($number): string {
     $formatter = new NumberFormatter('en_IN', NumberFormatter::SPELLOUT);
-    $integer = floor((float)$number);
-    if ($integer <= 0) return 'ZERO ONLY';
-    return strtoupper($formatter->format($integer) . ' only');
+    $number = round((float)$number, 2);
+    $rupees = (int) floor($number);
+    $paise = (int) round(($number - $rupees) * 100);
+
+    $parts = [];
+    if ($rupees > 0) {
+        $parts[] = strtoupper($formatter->format($rupees)) . ' RUPEES';
+    } else {
+        $parts[] = 'ZERO RUPEES';
+    }
+
+    if ($paise > 0) {
+        $parts[] = strtoupper($formatter->format($paise)) . ' PAISE';
+    }
+
+    return implode(' AND ', $parts) . ' ONLY';
 }
 
 $order_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
@@ -187,7 +200,7 @@ $balanceInvoice = isset($order['pending_amount']) ? (float)$order['pending_amoun
     }
     .meta-grid{
         display:grid;
-        grid-template-columns:1.3fr .8fr 1fr 1fr;
+        grid-template-columns:1.5fr .9fr 1fr;
         border-bottom:1px solid #111;
     }
     .meta-item{
@@ -290,11 +303,16 @@ $balanceInvoice = isset($order['pending_amount']) ? (float)$order['pending_amoun
         margin:4mm;
     }
     @media print{
+        html, body{
+            width:210mm;
+            height:148mm;
+            background:#fff;
+        }
         body{background:#fff;}
         .toolbar{display:none !important;}
         .page{
-            width:auto;
-            min-height:auto;
+            width:210mm;
+            min-height:148mm;
             margin:0;
             box-shadow:none;
             padding:0;
@@ -333,7 +351,6 @@ $balanceInvoice = isset($order['pending_amount']) ? (float)$order['pending_amoun
             <div class="meta-item"><span class="label">Invoice No :</span><?php echo htmlspecialchars((string)$order['order_number']); ?></div>
             <div class="meta-item"><span class="label">Date :</span><?php echo date('d-m-y', strtotime((string)$order['order_date'])); ?></div>
             <div class="meta-item"><span class="label">Staff :</span><?php echo htmlspecialchars($staffName); ?></div>
-            <div class="meta-item"><span class="label">Status :</span><?php echo htmlspecialchars(ucfirst((string)$order['payment_status'])); ?></div>
         </div>
 
         <table class="items">
